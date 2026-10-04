@@ -19,6 +19,11 @@ abstract interface class DohTransport {
   DnsOperation<DohHttpResponse> start(Uri uri, {required int maxResponseBytes});
 }
 
+abstract interface class DohWireTransport {
+  DnsOperation<DohHttpResponse> startWire(Uri uri, List<int> query,
+      {required int maxResponseBytes});
+}
+
 class DohResolver {
   final DohTransport transport;
   final Uri endpoint;

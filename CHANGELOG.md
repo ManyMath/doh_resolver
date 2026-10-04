@@ -1,5 +1,5 @@
 ## 0.0.1
 
 - Initial release.
-- Bounded JSON DNS over HTTPS and resolver-asserted TXT results.
-- Validator-held local DNSSEC evidence with owner and alias-chain checks.
+- Bounded JSON and wire-format DNS over HTTPS with explicit authentication evidence.
+- Validated wire replies and padded queries.
