@@ -21,25 +21,33 @@ class IoDohTransport implements DohTransport, DohWireTransport {
   final SecurityContext? securityContext;
   final Duration connectionTimeout;
   final Duration requestTimeout;
+  final Duration idleTimeout;
   final int maxConcurrentRequests;
   final int maxQueuedRequests;
   final bool padQueries;
+  final bool reuseConnections;
   int _active = 0;
+  bool _closed = false;
   final _waiting = Queue<_IoRequest>();
+  final _running = <_IoRequest>{};
+  final _idle = <_Lane>[];
   IoDohTransport(
       {this.proxy,
       this.proxyDestination,
       this.securityContext,
       this.connectionTimeout = const Duration(seconds: 5),
       this.requestTimeout = const Duration(seconds: 30),
+      this.idleTimeout = const Duration(seconds: 5),
       this.maxConcurrentRequests = 8,
       this.maxQueuedRequests = 64,
-      this.padQueries = true}) {
+      this.padQueries = true,
+      this.reuseConnections = true}) {
     if (proxy == null && proxyDestination != null) {
       throw ArgumentError('proxyDestination requires an explicit proxy');
     }
     if (connectionTimeout <= Duration.zero ||
         requestTimeout <= Duration.zero ||
+        idleTimeout <= Duration.zero ||
         maxConcurrentRequests < 1 ||
         maxQueuedRequests < 0) {
       throw ArgumentError('Invalid transport limits');
@@ -59,6 +67,16 @@ class IoDohTransport implements DohTransport, DohWireTransport {
         padQueries ? padDnsWireQuery(query) : checkedDnsWireQuery(query));
   }
 
+  Future<void> close() async {
+    _closed = true;
+    for (final request in [..._waiting, ..._running]) {
+      request.cancel();
+    }
+    for (final lane in [..._idle]) {
+      _retire(lane);
+    }
+  }
+
   DnsOperation<DohHttpResponse> _start(Uri uri, int maxResponseBytes,
       [List<int>? query]) {
     if (uri.scheme != 'https' ||
@@ -67,6 +85,12 @@ class IoDohTransport implements DohTransport, DohWireTransport {
         uri.hasFragment ||
         maxResponseBytes < 1) {
       throw ArgumentError('Expected a bounded HTTPS request');
+    }
+    if (_closed) {
+      return DnsOperation(
+          Future.error(
+              const DnsException(DnsError.cancelled, 'DNS transport closed')),
+          () {});
     }
     if (_active >= maxConcurrentRequests &&
         _waiting.length >= maxQueuedRequests) {
@@ -78,21 +102,149 @@ class IoDohTransport implements DohTransport, DohWireTransport {
     final request = _IoRequest(this, uri, maxResponseBytes, query);
     if (_active < maxConcurrentRequests) {
       _active++;
-      request.run();
+      _run(request);
     } else {
       _waiting.add(request);
     }
     return DnsOperation(request.result.future, request.cancel);
   }
 
-  void _release(_IoRequest request) {
+  void _run(_IoRequest request) {
+    _Lane? lane;
+    final origin = _origin(request.uri);
+    if (request.query case final query?) {
+      final id = query[0] << 8 | query[1];
+      for (var i = _idle.length - 1; i >= 0; i--) {
+        final candidate = _idle[i];
+        if (candidate.origin == origin && !candidate.hasUsedWireId(id)) {
+          _idle.removeAt(i);
+          lane = candidate;
+          break;
+        }
+      }
+    }
+    if (lane == null) {
+      // Keep the total number of live clients bounded by the concurrency cap.
+      // A client is pinned to one HTTPS origin so its per-host pool cannot grow
+      // across caller-selected resolver endpoints.
+      if (_idle.isNotEmpty) _retire(_idle.last);
+      lane = _newLane(origin);
+    }
+    lane.owner = request;
+    request.lane = lane;
+    _running.add(request);
+    lane.zone.run(request.run);
+  }
+
+  _Lane _newLane(_Origin origin) {
+    final lane = _Lane(origin);
+    lane.zone = Zone.current.fork(specification:
+        ZoneSpecification(handleUncaughtError: (_, __, ___, error, stack) {
+      if (lane.owner case final owner?) {
+        owner._finish(
+            const DnsException(
+                DnsError.transport, 'Resolver connection failed'),
+            stack);
+      } else {
+        _retire(lane);
+      }
+    }));
+    lane.client = lane.zone.run(() {
+      final client = HttpClient(context: securityContext)
+        ..connectionTimeout = connectionTimeout
+        ..idleTimeout = idleTimeout
+        ..maxConnectionsPerHost = 1
+        ..autoUncompress = false
+        ..userAgent = null
+        ..findProxy = (_) => 'DIRECT';
+      final proxy = this.proxy;
+      if (proxy != null) {
+        client.connectionFactory = (destination, _, __) async {
+          final owner = lane.owner;
+          if (owner == null ||
+              owner._done ||
+              _origin(destination) != lane.origin ||
+              _origin(owner.uri) != lane.origin) {
+            throw const DnsException(
+                DnsError.cancelled, 'DNS connection cancelled or redirected');
+          }
+          final task = SocksConnection.start(
+              proxyHost: proxy.host,
+              proxyPort: proxy.port,
+              targetHost: proxyDestination?.address ?? owner.uri.host,
+              targetPort: owner.uri.port,
+              tlsHost: owner.uri.host,
+              securityContext: securityContext,
+              credentials: proxy.credentials,
+              timeout: connectionTimeout);
+          lane.tasks.add(task);
+          task.socket.then((_) => lane.tasks.remove(task),
+              onError: (Object _) => lane.tasks.remove(task));
+          return task;
+        };
+      }
+      return client;
+    });
+    return lane;
+  }
+
+  void _retire(_Lane lane) {
+    if (lane.retired) return;
+    lane.retired = true;
+    lane.owner = null;
+    _idle.remove(lane);
+    lane.client.close(force: true);
+    for (final task in [...lane.tasks]) {
+      task.cancel();
+    }
+    lane.tasks.clear();
+  }
+
+  void _release(_IoRequest request, bool clean) {
     if (_waiting.remove(request)) return;
+    _running.remove(request);
+    final lane = request.lane!;
+    if (clean &&
+        request.query != null &&
+        reuseConnections &&
+        !_closed &&
+        !lane.retired) {
+      lane.markWireIdUsed(request.query![0] << 8 | request.query![1]);
+      lane.owner = null;
+      _idle.add(lane);
+    } else {
+      _retire(lane);
+    }
     _active--;
     while (_waiting.isNotEmpty && _active < maxConcurrentRequests) {
       _active++;
-      _waiting.removeFirst().run();
+      _run(_waiting.removeFirst());
     }
   }
+}
+
+typedef _Origin = ({String scheme, String host, int port});
+
+_Origin _origin(Uri uri) => (
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : 443,
+    );
+
+class _Lane {
+  final _Origin origin;
+  late final Zone zone;
+  late final HttpClient client;
+  final tasks = <ConnectionTask<Socket>>{};
+  final _usedWireIds = Uint8List(8192);
+  _IoRequest? owner;
+  bool retired = false;
+
+  _Lane(this.origin);
+
+  bool hasUsedWireId(int id) => _usedWireIds[id >> 3] & (1 << (id & 7)) != 0;
+
+  void markWireIdUsed(int id) => _usedWireIds[id >> 3] |= 1 << (id & 7);
 }
 
 class _IoRequest {
@@ -101,8 +253,7 @@ class _IoRequest {
   final int limit;
   final List<int>? query;
   final result = Completer<DohHttpResponse>();
-  final _tasks = <ConnectionTask<Socket>>[];
-  HttpClient? _client;
+  _Lane? lane;
   late final Timer _deadline;
   bool _done = false;
   _IoRequest(this.transport, this.uri, this.limit, this.query) {
@@ -112,53 +263,16 @@ class _IoRequest {
             const DnsException(DnsError.timedOut, 'DNS request timed out')));
   }
 
-  HttpClient _connect() {
-    final client = _client = HttpClient(context: transport.securityContext)
-      ..connectionTimeout = transport.connectionTimeout
-      ..autoUncompress = false
-      ..userAgent = null
-      ..findProxy = (_) => 'DIRECT';
-    final proxy = transport.proxy;
-    if (proxy != null) {
-      client.connectionFactory = (destination, _, __) async {
-        if (_done ||
-            destination.scheme != uri.scheme ||
-            destination.host != uri.host ||
-            destination.port != uri.port) {
-          throw const DnsException(
-              DnsError.cancelled, 'DNS connection cancelled or redirected');
-        }
-        final task = SocksConnection.start(
-            proxyHost: proxy.host,
-            proxyPort: proxy.port,
-            targetHost: transport.proxyDestination?.address ?? uri.host,
-            targetPort: uri.port,
-            tlsHost: uri.host,
-            securityContext: transport.securityContext,
-            credentials: proxy.credentials,
-            timeout: transport.connectionTimeout);
-        _tasks.add(task);
-        return task;
-      };
-    }
-    return client;
-  }
-
   void _finish(Object outcome, [StackTrace? stack]) {
     if (_done) return;
     _done = true;
     _deadline.cancel();
+    transport._release(this, outcome is DohHttpResponse);
     if (outcome is DohHttpResponse) {
       result.complete(outcome);
     } else {
       result.completeError(outcome, stack);
     }
-    _client?.close(force: true);
-    for (final task in _tasks) {
-      task.cancel();
-    }
-    _tasks.clear();
-    transport._release(this);
   }
 
   void cancel() =>
@@ -168,7 +282,11 @@ class _IoRequest {
     if (_done) return;
     try {
       final request =
-          await _connect().openUrl(query == null ? 'GET' : 'POST', uri);
+          await lane!.client.openUrl(query == null ? 'GET' : 'POST', uri);
+      if (_done) {
+        request.abort();
+        return;
+      }
       request.followRedirects = false;
       request.headers.removeAll(HttpHeaders.acceptEncodingHeader);
       request.headers.set(HttpHeaders.acceptHeader,

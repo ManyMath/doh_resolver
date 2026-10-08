@@ -5,14 +5,19 @@ Future<void> main(List<String> arguments) async {
     print('Usage: dart run example/doh_resolver_example.dart DOMAIN');
     return;
   }
-  final resolver = DohResolver(transport: IoDohTransport());
+  final transport = IoDohTransport();
   try {
-    final result = await resolver.lookupTxt(arguments.single);
-    print('Asserted by ${result.resolver} (${result.authentication.name})');
-    for (final record in result.records) {
-      print('${record.name} TTL=${record.ttl}: ${record.text}');
+    final resolver = DohResolver(transport: transport);
+    try {
+      final result = await resolver.lookupTxt(arguments.single);
+      print('Asserted by ${result.resolver} (${result.authentication.name})');
+      for (final record in result.records) {
+        print('${record.name} TTL=${record.ttl}: ${record.text}');
+      }
+    } on DnsException catch (error) {
+      print('Lookup rejected: ${error.code.name}');
     }
-  } on DnsException catch (error) {
-    print('Lookup rejected: ${error.code.name}');
+  } finally {
+    await transport.close();
   }
 }

@@ -40,20 +40,20 @@ void main() {
         await proxy.start();
         addTearDown(proxy.close);
       }
-      final resolver = DohResolver(
-          endpoint: endpoint(),
-          transport: IoDohTransport(
-              securityContext: trust,
-              proxy: proxied
-                  ? SocksProxy(InternetAddress.loopbackIPv4, proxy.port)
-                  : null,
-              proxyDestination: proxied ? InternetAddress('8.8.8.8') : null));
+      final transport = IoDohTransport(
+          securityContext: trust,
+          proxy: proxied
+              ? SocksProxy(InternetAddress.loopbackIPv4, proxy.port)
+              : null,
+          proxyDestination: proxied ? InternetAddress('8.8.8.8') : null);
+      final resolver = DohResolver(endpoint: endpoint(), transport: transport);
       final result = await resolver.lookupTxt('alice.example');
       expect(result.records.single.text, 'oa1:xmr recipient_address=valid;');
       expect(result.resolver, endpoint());
       expect(requests, 1);
       if (proxied) {
         expect(proxy.target, '8.8.8.8');
+        await transport.close();
         await proxy.disconnected.future.timeout(const Duration(seconds: 2));
       }
     });
