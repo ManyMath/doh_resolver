@@ -23,8 +23,14 @@ a numeric `proxyDestination`.
 
 Call `close()` when the transport is no longer needed. JSON connections are not
 reused because JSON has no transaction identifier. Wire connections are reused
-only for the same HTTPS origin and while transaction IDs remain unique on that
-connection; malformed, cancelled, timed-out, or failed exchanges retire the
+only for the same HTTPS origin. The transport gives each exchange a fresh
+random transaction ID on the wire, unique on its connection, and restores the
+caller's ID in the returned body, so callers may send ID 0 as RFC 8484
+recommends. Queries signed with SIG(0) or TSIG are sent byte-for-byte with
+their own ID, because the signature covers the header; that ID is likewise
+never repeated on a connection. Reuse defaults to off when a `proxy` is set, because
+queries sharing a connection can be linked by the resolver; pass
+`reuseConnections: true` to opt in. Malformed, cancelled, timed-out, or failed exchanges retire the
 connection. `maxConcurrentRequests` and `maxQueuedRequests` bound admitted
 work; a full queue fails new operations with `DnsTransportException`.
 

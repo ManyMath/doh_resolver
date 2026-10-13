@@ -29,8 +29,11 @@ abstract interface class DohTransport {
 }
 
 abstract interface class DohWireTransport {
+  /// Sends wire [query]. With [preserveMessage], the query is sent and the
+  /// response returned exactly as exchanged, with no padding or ID rewrite,
+  /// for transaction signatures such as SIG(0) that cover both messages.
   DnsOperation<DohHttpResponse> startWire(Uri uri, List<int> query,
-      {required int maxResponseBytes});
+      {required int maxResponseBytes, bool preserveMessage = false});
 }
 
 class DohResolver {

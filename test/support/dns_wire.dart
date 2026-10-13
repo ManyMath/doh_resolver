@@ -81,3 +81,30 @@ List<int> wireReply(
     ];
 
 List<int> txtRdata(String text) => [text.length, ...ascii.encode(text)];
+
+/// A NOERROR reply that echoes [query]'s ID, question and OPT record.
+List<int> wireEcho(List<int> query) => [...query]
+  ..[2] = 0x81
+  ..[3] = 0x80;
+
+String wireFirstLabel(List<int> message) =>
+    ascii.decode(message.sublist(13, 13 + message[12]));
+
+/// A query whose last additional record is a SIG(0) (type 24) or TSIG
+/// (type 250); both sign the header, including the ID.
+List<int> wireSignedQuery({int id = 0x1234, int type = 24}) => [
+      ...wireHeader(id: id, ar: 2),
+      ...wireQuestion(wireName('alice.example')),
+      ...wireOpt(),
+      ...wireRecord(
+          [0],
+          type,
+          type == 24
+              ? [
+                  ...u16(0), 13, 0, 0, 0, 0, 0, //
+                  0, 0, 0, 2, 0, 0, 0, 1, ...u16(7),
+                  ...wireName('key.example'), 1, 2, 3, 4
+                ]
+              : [...wireName('hmac-sha256'), 1, 2, 3, 4],
+          dnsClass: 255),
+    ];

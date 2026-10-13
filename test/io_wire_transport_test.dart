@@ -61,8 +61,9 @@ void main() {
       expect(response.statusCode, 200);
       expect(response.body.sublist(0, 2), [0xbe, 0xef]);
       expect(sent!.length % 128, 0);
-      expect(sent!.sublist(0, query.length - 2),
-          query.sublist(0, query.length - 2));
+      expect(sent!.sublist(2, query.length - 2),
+          query.sublist(2, query.length - 2),
+          reason: 'only the ID and OPT length may change');
       if (proxied) {
         expect(proxy.targetType, 3, reason: 'hostname must reach the proxy');
         expect(proxy.target, 'localhost');
@@ -78,7 +79,7 @@ void main() {
             securityContext: pki.clientContext(), padQueries: false)
         .startWire(endpoint(), query, maxResponseBytes: 65535)
         .result;
-    expect(sent, query);
+    expect(sent!.sublist(2), query.sublist(2));
   });
 
   test('rejects invalid queries and URIs through the result, unconnected',
@@ -194,11 +195,14 @@ void main() {
 
   test('concurrency limit queues requests and frees slots on every outcome',
       () async {
-    final held = <HttpRequest>[];
+    // Concurrent handshakes race and the wire ID is the transport's, so key
+    // held requests by question name.
+    final held = <String, (HttpRequest, List<int>)>{};
     var arrivals = 0;
-    server.listen((request) {
+    server.listen((request) async {
+      final body = await request.fold<List<int>>([], (a, b) => a..addAll(b));
+      held[wireFirstLabel(body)] = (request, body);
       arrivals++;
-      held.add(request);
     });
     Future<void> until(bool Function() condition) async {
       for (var i = 0; i < 200 && !condition(); i++) {
@@ -208,10 +212,12 @@ void main() {
     }
 
     final transport = IoDohTransport(
-        securityContext: pki.clientContext(), maxConcurrentRequests: 2);
+        securityContext: pki.clientContext(),
+        maxConcurrentRequests: 2,
+        requestTimeout: const Duration(seconds: 5));
     final operations = [
       for (var id = 1; id <= 4; id++)
-        transport.startWire(endpoint(), wireQuery(id: id),
+        transport.startWire(endpoint(), wireQuery(id: id, name: 'q$id.example'),
             maxResponseBytes: 512)
     ];
     final outcomes = [
@@ -224,11 +230,12 @@ void main() {
     operations[0].cancel();
     expect(await outcomes[0], isA<DnsCancelledException>());
     await until(() => arrivals == 3);
-    for (final request in held.skip(1)) {
-      final body = await request.fold<List<int>>([], (a, b) => a..addAll(b));
+    expect(held.keys, unorderedEquals(['q1', 'q2', 'q3']));
+    for (final label in ['q2', 'q3']) {
+      final (request, body) = held[label]!;
       request.response
         ..headers.contentType = ContentType('application', 'dns-message')
-        ..add(wireReply(id: body[0] << 8 | body[1]));
+        ..add(wireEcho(body));
       unawaited(request.response.close());
     }
     expect(await outcomes[1], isA<DohHttpResponse>());

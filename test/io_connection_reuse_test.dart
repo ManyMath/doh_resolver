@@ -50,10 +50,11 @@ void main() {
     return transport;
   }
 
-  DnsOperation<DohHttpResponse> start(IoDohTransport transport, int id) =>
+  DnsOperation<DohHttpResponse> start(IoDohTransport transport, int id,
+          {String name = 'alice.example'}) =>
       transport.startWire(
           Uri.parse('https://localhost:${server.port}/dns-query'),
-          wireQuery(id: id),
+          wireQuery(id: id, name: name),
           maxResponseBytes: 512);
 
   Future<void> until(bool Function() condition) async {
@@ -196,16 +197,17 @@ void main() {
       });
       final proxy = await tunnel(proxied);
       final t = transport(proxy, maxConcurrentRequests: 2);
-      final a = start(t, 1);
-      final b = start(t, 2);
+      final a = start(t, 1, name: 'a.example');
+      final b = start(t, 2, name: 'b.example');
       final aFailed =
           expectLater(a.result, throwsA(isA<DnsCancelledException>()));
       await until(() => server.exchanges.length == 2);
-      final held = server.exchanges.firstWhere((e) => e.id == 2);
+      final held =
+          server.exchanges.firstWhere((e) => wireFirstLabel(e.body) == 'b');
       a.cancel();
       await aFailed;
       await until(() => server.closed == 1);
-      answer(held);
+      held.send(httpResponse(wireEcho(held.body)));
       expect((await b.result).body.sublist(0, 2), u16(2));
       await expectAnswer(t, 3);
       expect(server.connections, 2);
@@ -213,6 +215,82 @@ void main() {
       expect(server.closed, 1);
     });
   }
+
+  for (final proxied in [false, true]) {
+    test(
+        'reuse defaults ${proxied ? 'off with' : 'on without'} a proxy, '
+        'so proxied lookups are not linked', () async {
+      await serve(answer);
+      final proxy = await tunnel(proxied);
+      final t = IoDohTransport(
+          securityContext: pki.clientContext(),
+          proxy: proxy == null
+              ? null
+              : SocksProxy(InternetAddress.loopbackIPv4, proxy.port));
+      addTearDown(t.close);
+      expect(t.reuseConnections, !proxied);
+      for (var id = 1; id <= 3; id++) {
+        await expectAnswer(t, id);
+      }
+      expect(server.connections, proxied ? 3 : 1);
+      if (proxy != null) expect(proxy.connections, 3);
+    });
+  }
+
+  for (final (name, type) in [('SIG(0)', 24), ('TSIG', 250)]) {
+    test('$name-signed queries keep their exact bytes and ID', () async {
+      await serve(answer);
+      final t = transport(null);
+      Future<void> send(int id) async {
+        final query = wireSignedQuery(id: id, type: type);
+        final response = await t
+            .startWire(
+                Uri.parse('https://localhost:${server.port}/dns-query'), query,
+                maxResponseBytes: 512)
+            .result;
+        expect(server.exchanges.last.body, query,
+            reason: 'the signature covers the header and every record');
+        expect(response.body.sublist(0, 2), u16(id));
+      }
+
+      await send(0x5150);
+      await send(0x5150);
+      expect(server.connections, 2,
+          reason: 'a preserved ID is still never repeated on one connection');
+      await send(0x5151);
+      expect(server.connections, 2);
+    });
+  }
+
+  test('preserveMessage exchanges an unsigned query byte-for-byte', () async {
+    // A SIG(0)-signed response covers its header and the request as sent.
+    final served = <List<int>>[];
+    await serve((e) {
+      // The echoed OPT plus a stand-in SIG(0) record.
+      final signed = [
+        ...wireEcho(e.body)..[11] = 2,
+        ...wireRecord([0], 24, [...List.filled(18, 0), 0, 9]),
+      ];
+      served.add(signed);
+      e.send(httpResponse(signed));
+    });
+    final t = transport(null);
+    final query = wireQuery(id: 0x0bad);
+    Future<DohHttpResponse> send() => t
+        .startWire(
+            Uri.parse('https://localhost:${server.port}/dns-query'), query,
+            maxResponseBytes: 512, preserveMessage: true)
+        .result;
+
+    final response = await send();
+    expect(server.exchanges.last.body, query,
+        reason: 'no padding and no ID rewrite');
+    expect(response.body, served.last,
+        reason: 'the response is returned exactly as signed');
+    await send();
+    expect(server.connections, 2,
+        reason: 'a preserved ID is still never repeated on one connection');
+  });
 
   test('an unsolicited response on an idle lane retires only that lane',
       () async {
@@ -270,7 +348,18 @@ void main() {
     expect(server.connections, 2);
   });
 
-  test('a wire transaction ID is never reused on one connection', () async {
+  test('repeated caller IDs reuse one connection with distinct wire IDs',
+      () async {
+    await serve(answer);
+    final t = transport(null);
+    for (var i = 0; i < 4; i++) {
+      await expectAnswer(t, 0);
+    }
+    expect(server.connections, 1);
+    expect(server.exchanges.map((e) => e.id).toSet(), hasLength(4));
+  });
+
+  test('a stale duplicate reply never answers the next request', () async {
     await serve((e) async {
       if (e.index == 1) {
         e.send(httpResponse(wireReply(id: e.id, flags: 0x8183)));
@@ -283,9 +372,18 @@ void main() {
       }
     });
     final t = transport(null);
-    expect((await start(t, 0x1111).result).body[3] & 0xf, 3);
-    expect((await start(t, 0x1111).result).body[3] & 0xf, 0);
-    expect(server.connections, 2);
+    expect((await start(t, 0).result).body[3] & 0xf, 3);
+    // The duplicate is either seen on the idle connection, which is retired,
+    // or consumed by the next request, whose wire ID it fails to match.
+    final next = await start(t, 0)
+        .result
+        .then<Object>((r) => r, onError: (Object e) => e);
+    if (next is DohHttpResponse) {
+      expect(next.body[3] & 0xf, 0);
+      expect(server.connections, 2);
+    } else {
+      expect(next, isA<DnsQuestionMismatchException>());
+    }
   });
 
   test('a connection closed by the server while idle is not reused', () async {
