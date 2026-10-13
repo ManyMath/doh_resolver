@@ -67,6 +67,79 @@ void main() {
     }
   });
 
+  test('registers uncompressed names embedded in newer RDATA types', () {
+    final first = wireName('first.example');
+    final second = wireName('second.example');
+    final cases = <(int, List<int>, List<int>)>[
+      // SVCB and HTTPS: priority, TargetName, then SvcParams.
+      (64, [0, 1, ...first], [2]),
+      (65, [0, 1, ...first, 0, 1, 0, 2, 0x68, 0x32], [2]),
+      // HIP: HIT and public key, then rendezvous servers.
+      (
+        55,
+        [2, 1, 0, 1, 0xaa, 0xbb, 0xcc, ...first, ...second],
+        [7, 7 + first.length]
+      ),
+      (58, [...first, ...second], [0, first.length]),
+      (107, [0, 1, ...first], [2]),
+      (249, [...first, ...List.filled(16, 0)], [0]),
+      (250, [...first, ...List.filled(16, 0)], [0]),
+      // AMTRELAY with a domain-name relay (type 3).
+      (260, [0, 3, ...first], [2]),
+      (23, first, [0]),
+      // IPSECKEY with a domain-name gateway (type 3), then the public key.
+      (45, [10, 3, 2, ...first, 1, 2, 3], [3]),
+      // DSYNC: RRtype, scheme and port, then the target.
+      (66, [0, 59, 1, 0x14, 0xeb, ...first], [5]),
+    ];
+    for (final (type, rdata, offsets) in cases) {
+      validateDnsWireResponse(
+          query, wireReply(answers: [wireRecord(pointer, type, rdata)]));
+      for (final offset in offsets) {
+        validateDnsWireResponse(
+            query, _ownerPointerIntoRdata(type, rdata, offset));
+      }
+    }
+  });
+
+  test('newer RDATA names must not be compressed or overrun', () {
+    for (final (type, rdata) in <(int, List<int>)>[
+      (64, [0, 1, ...pointer]),
+      (65, [0, 1, ...pointer]),
+      (55, [1, 1, 0, 0, 0xaa, ...pointer]),
+      (55, [4, 1, 0, 0, 0xaa]),
+      (58, [...pointer, 0]),
+      (58, [0]),
+      (107, [0, 1, 0, 0]),
+      (250, [...pointer]),
+      (260, [0, 3, ...pointer]),
+      (260, [0, 1, 1, 2, 3]),
+      (260, [0, 0, 1]),
+      (23, pointer),
+      (45, [10, 3, 2, ...pointer]),
+      (45, [10, 1, 2, 1, 2, 3]),
+      (66, [0, 59, 1, 0x14, 0xeb, ...pointer]),
+      (66, [0, 59, 1, 0x14, 0xeb, 0, 1]),
+    ]) {
+      expect(
+          () => validateDnsWireResponse(
+              query, wireReply(answers: [wireRecord(pointer, type, rdata)])),
+          throwsA(isA<DnsMalformedResponseException>()),
+          reason: 'type $type rdata $rdata');
+    }
+    for (final (type, rdata) in <(int, List<int>)>[
+      (260, [0, 1, 1, 2, 3, 4]),
+      (260, [0, 2, ...List.filled(16, 0)]),
+      (260, [0, 0]),
+      (45, [10, 0, 2, 1, 2, 3]),
+      (45, [10, 1, 2, 1, 2, 3, 4, 9]),
+      (45, [10, 2, 0, ...List.filled(16, 0)]),
+    ]) {
+      validateDnsWireResponse(
+          query, wireReply(answers: [wireRecord(pointer, type, rdata)]));
+    }
+  });
+
   test('accepts legacy RDATA compression required for compatibility', () {
     for (final (type, rdata) in <(int, List<int>)>[
       (17, [...pointer, ...pointer]),

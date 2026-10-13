@@ -228,6 +228,54 @@ class _WireMessage {
         if (_offset >= end) throw _malformed;
       case 47:
         _name(limit: end, compressed: false);
+      // Newer types forbid compressing their own names, but a later name may
+      // still point into them, so each one is walked and registered.
+      case 55:
+        _skip(4, end);
+        final hitLength = data[_offset - 4];
+        final keyLength = _u16(_offset - 2);
+        _skip(hitLength + keyLength, end);
+        while (_offset < end) {
+          _name(limit: end, compressed: false);
+        }
+      case 58:
+        _name(limit: end, compressed: false);
+        _name(limit: end, compressed: false);
+      case 64 || 65 || 107:
+        _skip(2, end);
+        _name(limit: end, compressed: false);
+      case 249 || 250:
+        _name(limit: end, compressed: false);
+      case 23:
+        _name(limit: end, compressed: false);
+      case 66:
+        _skip(5, end);
+        _name(limit: end, compressed: false);
+      case 45:
+        // Precedence, gateway type and algorithm, then the gateway.
+        _skip(3, end);
+        switch (data[_offset - 2]) {
+          case 1:
+            _skip(4, end);
+          case 2:
+            _skip(16, end);
+          case 3:
+            _name(limit: end, compressed: false);
+        }
+      case 260:
+        _skip(2, end);
+        switch (data[_offset - 1] & 0x7f) {
+          case 0:
+            break;
+          case 1:
+            _skip(4, end);
+          case 2:
+            _skip(16, end);
+          case 3:
+            _name(limit: end, compressed: false);
+          default:
+            _offset = end;
+        }
     }
     if (_offset > end ||
         ({
@@ -250,7 +298,13 @@ class _WireMessage {
               35,
               36,
               38,
-              39
+              23,
+              39,
+              55,
+              58,
+              66,
+              107,
+              260
             }.contains(type) &&
             _offset != end)) {
       throw _malformed;
