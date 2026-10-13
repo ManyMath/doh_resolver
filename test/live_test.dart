@@ -47,4 +47,15 @@ void main() {
       expect(result.records, isNotEmpty);
     }, skip: skip);
   }
+  test('Google raw and Cloudflare quoted TXT decode identically', () async {
+    Future<Set<String>> texts(Uri endpoint) async => {
+          for (final record in (await DohResolver(
+                      transport: IoDohTransport(), endpoint: endpoint)
+                  .lookupTxt('getmonero.org'))
+              .records)
+            record.text
+        };
+    expect(await texts(Uri.https('dns.google', '/resolve')),
+        await texts(Uri.https('cloudflare-dns.com', '/dns-query')));
+  }, skip: skip);
 }

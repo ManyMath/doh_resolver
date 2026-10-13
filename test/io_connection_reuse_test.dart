@@ -339,6 +339,7 @@ void main() {
     });
     final t = transport(null);
     final resolver = DohResolver(
+        txtFormat: DnsTxtFormat.raw,
         transport: t,
         endpoint: Uri.parse('https://localhost:${server.port}/resolve'));
     expect(

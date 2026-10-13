@@ -98,7 +98,8 @@ void main() {
         {'name': 'bob.example.', 'type': 16, 'TTL': 60, 'data': 'A'}
       ],
     }, resolver: endpoint);
-    final result = response.authenticatedTxt('bob.example');
+    final result =
+        response.authenticatedTxt('bob.example', txtFormat: DnsTxtFormat.raw);
     expect(result.authentication, DnsAuthentication.resolverAsserted);
     expect(result.validator, isNull);
   });

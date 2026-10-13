@@ -41,14 +41,20 @@ class DohResolver {
   final Uri endpoint;
   final Duration timeout;
   final int maxResponseBytes;
+  final DnsTxtFormat txtFormat;
   // Decoded once so a malformed endpoint fails construction, not each lookup.
   late final Map<String, List<String>> _endpointParameters;
   DohResolver(
       {required this.transport,
       Uri? endpoint,
       this.timeout = const Duration(seconds: 12),
-      this.maxResponseBytes = 65536})
-      : endpoint = endpoint ?? Uri.https('dns.google', '/resolve') {
+      this.maxResponseBytes = 65536,
+      DnsTxtFormat? txtFormat})
+      : endpoint = endpoint ??= Uri.https('dns.google', '/resolve'),
+        txtFormat = txtFormat ??
+            _knownTxtFormat(endpoint.host) ??
+            (throw ArgumentError.value(endpoint, 'endpoint',
+                'Pass txtFormat: JSON TXT encoding differs between providers')) {
     if (this.endpoint.scheme != 'https' ||
         this.endpoint.host.isEmpty ||
         this.endpoint.userInfo.isNotEmpty ||
@@ -128,7 +134,7 @@ class DohResolver {
         final body = jsonDecode(utf8.decode(response.body));
         result.complete(
             DnsResponse.fromJson(body, resolver: endpoint, age: response.age)
-                .authenticatedTxt(domain));
+                .authenticatedTxt(domain, txtFormat: txtFormat));
       } on DnsException catch (error, stack) {
         result.completeError(error, stack);
       } on FormatException catch (_, stack) {
@@ -157,3 +163,18 @@ class DohResolver {
         () => abort(const DnsCancelledException('DNS query cancelled')));
   }
 }
+
+DnsTxtFormat? _knownTxtFormat(String host) => switch (host) {
+      'dns.google' ||
+      'dns.google.com' ||
+      '8.8.8.8' ||
+      '8.8.4.4' =>
+        DnsTxtFormat.raw,
+      'cloudflare-dns.com' ||
+      'one.one.one.one' ||
+      '1.1.1.1' ||
+      '1.0.0.1' =>
+        DnsTxtFormat.quoted,
+      _ when host.endsWith('.cloudflare-dns.com') => DnsTxtFormat.quoted,
+      _ => null,
+    };

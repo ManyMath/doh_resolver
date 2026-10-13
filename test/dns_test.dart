@@ -47,7 +47,8 @@ void main() {
       rr('pay.example.', 16, 'two'),
       rr('evil.example.', 16, 'evil')
     ]));
-    final result = response.authenticatedTxt('Alice.Example.');
+    final result = response.authenticatedTxt('Alice.Example.',
+        txtFormat: DnsTxtFormat.raw);
     expect(result.records.map((r) => r.text), ['one', 'two']);
     expect(result.canonicalName, 'pay.example');
     expect(result.aliases, hasLength(1));
@@ -61,14 +62,17 @@ void main() {
         reply()..remove(field),
         reply()..[field] = field != 'AD'
       ]) {
-        expect(() => decode(body).authenticatedTxt('alice.example'),
+        expect(
+            () => decode(body)
+                .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
             throwsA(isA<DnsAuthenticationUnavailableException>()));
       }
     });
   }
   test('DNS error preserves status without inferring bogus or unsigned', () {
     expect(
-        () => decode(reply()..['Status'] = 2).authenticatedTxt('alice.example'),
+        () => decode(reply()..['Status'] = 2)
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
         throwsA(
             isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
   });
@@ -116,21 +120,21 @@ void main() {
     test('rejects mismatched questions $questions', () {
       expect(
           () => decode(reply()..['Question'] = questions)
-              .authenticatedTxt('alice.example'),
+              .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
           throwsA(isA<DnsQuestionMismatchException>()));
     });
   }
   test('no answers is distinct from DNS failure', () {
     expect(
         decode(reply()..remove('Answer'))
-            .authenticatedTxt('alice.example')
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw)
             .records,
         isEmpty);
   });
   test('rejects loops, ambiguous owners and excessive chains', () {
     expect(
         () => decode(reply(answers: [rr('alice.example', 5, 'alice.example')]))
-            .authenticatedTxt('alice.example'),
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
         throwsA(isA<DnsAliasLoopException>()));
     for (final records in [
       [rr('alice.example', 5, 'pay.example'), rr('alice.example', 16, 'txt')],
@@ -140,8 +144,8 @@ void main() {
       ]
     ]) {
       expect(
-          () =>
-              decode(reply(answers: records)).authenticatedTxt('alice.example'),
+          () => decode(reply(answers: records))
+              .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
           throwsA(isA<DnsAliasAmbiguousException>()));
     }
     final chain = [
@@ -150,7 +154,8 @@ void main() {
       rr('hop7.example', 16, 'txt')
     ];
     expect(
-        () => decode(reply(answers: chain)).authenticatedTxt('alice.example'),
+        () => decode(reply(answers: chain))
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
         throwsA(isA<DnsAliasTooLongException>()));
   });
   test('rejects invalid TTLs, names, record data, types and response shape',
@@ -180,13 +185,17 @@ void main() {
   });
   test('TXT chunks and decimal UTF-8 octets are decoded without loss', () {
     expect(
-        utf8.decode(
-            decodeDnsTxtBytes(r'"oa1:xmr recipient_" "address=valid;"')),
+        utf8.decode(decodeDnsTxtBytes(
+            r'"oa1:xmr recipient_" "address=valid;"', DnsTxtFormat.quoted)),
         'oa1:xmr recipient_address=valid;');
-    expect(utf8.decode(decodeDnsTxtBytes(r'"\195\169\032\""')), 'é "');
-    expect(utf8.decode(decodeDnsTxtBytes('"emoji 😀"')), 'emoji 😀');
-    expect(decodeDnsTxtBytes(r'"\255"'), [255]);
-    expect(utf8.decode(decodeDnsTxtBytes('"\\😀"')), '😀');
+    expect(
+        utf8.decode(
+            decodeDnsTxtBytes(r'"\195\169\032\""', DnsTxtFormat.quoted)),
+        'é "');
+    expect(utf8.decode(decodeDnsTxtBytes('"emoji 😀"', DnsTxtFormat.quoted)),
+        'emoji 😀');
+    expect(decodeDnsTxtBytes(r'"\255"', DnsTxtFormat.quoted), [255]);
+    expect(utf8.decode(decodeDnsTxtBytes('"\\😀"', DnsTxtFormat.quoted)), '😀');
     expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
         throwsA(isA<DnsMalformedResponseException>()));
   });
@@ -223,7 +232,7 @@ void main() {
       final result = decode(reply(answers: [
         rr('alice.example', 5, 'pay.example')..['TTL'] = raw,
         rr('pay.example', 16, 'x')..['TTL'] = raw,
-      ])).authenticatedTxt('alice.example');
+      ])).authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw);
       expect(result.records.single.ttl, ttl);
       expect(result.aliases.single.ttl, ttl);
       final issued = DnsValidationIssuer('test').issueTxt(
@@ -241,6 +250,59 @@ void main() {
       expect(issued.aliases.single.ttl, ttl);
     }
   });
+  test('raw TXT is taken verbatim and quoted TXT must be quoted', () {
+    for (final value in ['"hello"', r'\065 x', '"unmatched']) {
+      expect(utf8.decode(decodeDnsTxtBytes(value, DnsTxtFormat.raw)), value);
+    }
+    expect(() => decodeDnsTxtBytes('lone \ud800', DnsTxtFormat.raw),
+        throwsA(isA<DnsMalformedResponseException>()));
+    expect(decodeDnsTxtBytes('""', DnsTxtFormat.quoted), isEmpty);
+    expect(decodeDnsTxtBytes(' "" "" ', DnsTxtFormat.quoted), isEmpty);
+    for (final value in ['hello', 'a "b"', '', '   ']) {
+      expect(() => decodeDnsTxtBytes(value, DnsTxtFormat.quoted),
+          throwsA(isA<DnsMalformedResponseException>()));
+    }
+  });
+  test('known resolvers get their TXT format; others must choose', () {
+    DnsTxtFormat formatOf(String url) =>
+        DohResolver(transport: FakeTransport(), endpoint: Uri.parse(url))
+            .txtFormat;
+    expect(DohResolver(transport: FakeTransport()).txtFormat, DnsTxtFormat.raw);
+    expect(formatOf('https://dns.google/resolve'), DnsTxtFormat.raw);
+    for (final host in [
+      'cloudflare-dns.com',
+      'security.cloudflare-dns.com',
+      'one.one.one.one',
+      '1.1.1.1'
+    ]) {
+      expect(formatOf('https://$host/dns-query'), DnsTxtFormat.quoted);
+    }
+    expect(() => formatOf('https://resolver.example/resolve'),
+        throwsArgumentError);
+    expect(
+        DohResolver(
+                transport: FakeTransport(),
+                endpoint: Uri.parse('https://dns.google/resolve'),
+                txtFormat: DnsTxtFormat.quoted)
+            .txtFormat,
+        DnsTxtFormat.quoted);
+  });
+  for (final (endpoint, data, text) in [
+    ('https://dns.google/resolve', '"hello"', '"hello"'),
+    ('https://cloudflare-dns.com/dns-query', r'"hel" "lo\033"', 'hello!'),
+  ]) {
+    test('$endpoint TXT $data decodes to $text', () async {
+      final transport = FakeTransport();
+      final result =
+          DohResolver(transport: transport, endpoint: Uri.parse(endpoint))
+              .lookupTxt('alice.example');
+      transport.completer.complete(DohHttpResponse(
+          200,
+          utf8.encode(
+              jsonEncode(reply(answers: [rr('alice.example', 16, data)])))));
+      expect((await result).records.single.text, text);
+    });
+  }
   test('malformed and overlong TXT cannot turn into recipient data', () {
     for (final s in [
       '"unterminated',
@@ -255,10 +317,10 @@ void main() {
       '"\\\ud800"',
       '"\ud800 x"',
     ]) {
-      expect(() => decodeDnsTxtBytes(s),
+      expect(() => decodeDnsTxtBytes(s, DnsTxtFormat.quoted),
           throwsA(isA<DnsMalformedResponseException>()));
     }
-    expect(() => decodeDnsTxtBytes('a' * 8193),
+    expect(() => decodeDnsTxtBytes('a' * 8193, DnsTxtFormat.quoted),
         throwsA(isA<DnsResponseTooLargeException>()));
   });
   test('DNS names allow service labels without permitting alias syntax', () {
@@ -297,6 +359,7 @@ void main() {
   test('repeated endpoint parameters survive; resolver keys override', () {
     final transport = FakeTransport();
     DohResolver(
+            txtFormat: DnsTxtFormat.raw,
             transport: transport,
             endpoint: Uri.parse('https://dns.example/resolve'
                 '?tag=first&tag=second&name=evil&type=A&type=AAAA'))
@@ -312,6 +375,7 @@ void main() {
     for (final name in ['a.example', 'abcd.example']) {
       final transport = FakeTransport();
       DohResolver(
+              txtFormat: DnsTxtFormat.raw,
               transport: transport,
               endpoint: Uri.parse('https://dns.example/resolve?ct=x'))
           .startTxtLookup(name);
@@ -338,7 +402,9 @@ void main() {
     ]) {
       expect(
           () => DohResolver(
-              transport: FakeTransport(), endpoint: Uri.parse(endpoint)),
+              txtFormat: DnsTxtFormat.raw,
+              transport: FakeTransport(),
+              endpoint: Uri.parse(endpoint)),
           throwsArgumentError);
     }
   });

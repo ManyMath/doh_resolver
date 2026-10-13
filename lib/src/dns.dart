@@ -316,7 +316,7 @@ class DnsResponse {
   }
 
   AuthenticatedTxtResult authenticatedTxt(String domain,
-      {int maxOwnerVisits = 8}) {
+      {required DnsTxtFormat txtFormat, int maxOwnerVisits = 8}) {
     domain = normalizeDnsName(domain);
     if (status != 0) {
       throw DnsQueryFailedException('DNS query failed', rcode: status);
@@ -349,7 +349,9 @@ class DnsResponse {
             resolver,
             txt
                 .map((r) => DnsTxtRecord(
-                    name: owner, ttl: r.ttl, bytes: decodeDnsTxtBytes(r.data)))
+                    name: owner,
+                    ttl: r.ttl,
+                    bytes: decodeDnsTxtBytes(r.data, txtFormat)))
                 .toList(),
             aliases,
             this);
@@ -368,8 +370,22 @@ class DnsResponse {
   }
 }
 
-// DNS decimal escapes encode octets; decode UTF-8 only after joining TXT chunks.
-List<int> decodeDnsTxtBytes(String value, {int maxPresentationLength = 8192}) {
+/// How a JSON DoH resolver writes TXT `data`. Providers differ and a value
+/// alone cannot reveal which form it is in, so the format is set per endpoint.
+enum DnsTxtFormat {
+  /// Quoted RFC 1035 character-strings separated by spaces, with `\DDD`
+  /// decimal and `\X` literal escapes, as Cloudflare returns them.
+  quoted,
+
+  /// The character-strings concatenated verbatim, without quoting or
+  /// escaping, as Google returns them.
+  raw,
+}
+
+/// Decodes JSON TXT `data` in [format] to the record's octets. DNS decimal
+/// escapes encode octets, so UTF-8 is decoded only after chunks are joined.
+List<int> decodeDnsTxtBytes(String value, DnsTxtFormat format,
+    {int maxPresentationLength = 8192}) {
   if (value.length > maxPresentationLength) {
     throw const DnsResponseTooLargeException('TXT presentation exceeds limit');
   }
@@ -385,8 +401,9 @@ List<int> decodeDnsTxtBytes(String value, {int maxPresentationLength = 8192}) {
       i++;
     }
   }
-  if (!value.startsWith('"')) return utf8.encode(value);
+  if (format == DnsTxtFormat.raw) return utf8.encode(value);
   final bytes = <int>[];
+  var strings = 0;
   var i = 0;
   while (i < value.length) {
     while (i < value.length && value[i] == ' ') {
@@ -431,6 +448,9 @@ List<int> decodeDnsTxtBytes(String value, {int maxPresentationLength = 8192}) {
       }
     }
     if (!closed) throw malformed;
+    strings++;
   }
+  // A TXT record holds at least one character-string, though it may be "".
+  if (strings == 0) throw malformed;
   return bytes;
 }

@@ -46,7 +46,10 @@ void main() {
               ? SocksProxy(InternetAddress.loopbackIPv4, proxy.port)
               : null,
           proxyDestination: proxied ? InternetAddress('8.8.8.8') : null);
-      final resolver = DohResolver(endpoint: endpoint(), transport: transport);
+      final resolver = DohResolver(
+          txtFormat: DnsTxtFormat.raw,
+          endpoint: endpoint(),
+          transport: transport);
       final result = await resolver.lookupTxt('alice.example');
       expect(result.records.single.text, 'oa1:xmr recipient_address=valid;');
       expect(result.resolver, endpoint());
@@ -69,6 +72,7 @@ void main() {
     await proxy.start();
     addTearDown(proxy.close);
     final resolver = DohResolver(
+        txtFormat: DnsTxtFormat.raw,
         endpoint: endpoint(),
         transport: IoDohTransport(
             securityContext: trust,
@@ -82,7 +86,10 @@ void main() {
   test('HTTPS identity must be trusted', () async {
     server.listen((r) => r.response.close(), onError: (Object _) {});
     await expectLater(
-        DohResolver(endpoint: endpoint(), transport: IoDohTransport())
+        DohResolver(
+                txtFormat: DnsTxtFormat.raw,
+                endpoint: endpoint(),
+                transport: IoDohTransport())
             .lookupTxt('alice.example'),
         throwsA(isA<DnsTransportException>()));
   });
@@ -97,6 +104,7 @@ void main() {
     });
     await expectLater(
         DohResolver(
+                txtFormat: DnsTxtFormat.raw,
                 endpoint: endpoint(),
                 transport: IoDohTransport(securityContext: trust))
             .lookupTxt('alice.example'),
@@ -111,6 +119,7 @@ void main() {
     });
     await expectLater(
         DohResolver(
+                txtFormat: DnsTxtFormat.raw,
                 endpoint: endpoint(),
                 maxResponseBytes: 128,
                 transport: IoDohTransport(securityContext: trust))
@@ -126,6 +135,7 @@ void main() {
     });
     await expectLater(
         DohResolver(
+                txtFormat: DnsTxtFormat.raw,
                 endpoint: endpoint(),
                 transport: IoDohTransport(securityContext: trust))
             .lookupTxt('alice.example'),
@@ -145,6 +155,7 @@ void main() {
       await proxy.start();
       addTearDown(proxy.close);
       final resolver = DohResolver(
+          txtFormat: DnsTxtFormat.raw,
           endpoint: endpoint(),
           timeout: const Duration(milliseconds: 300),
           transport: IoDohTransport(
@@ -188,6 +199,7 @@ void main() {
       r.response.close();
     });
     final result = await DohResolver(
+            txtFormat: DnsTxtFormat.raw,
             endpoint: endpoint(),
             transport: IoDohTransport(securityContext: trust))
         .lookupTxt('alice.example');
@@ -255,6 +267,7 @@ void main() {
       });
       await expectLater(
           DohResolver(
+                  txtFormat: DnsTxtFormat.raw,
                   endpoint: endpoint(),
                   transport: IoDohTransport(securityContext: trust))
               .lookupTxt('alice.example'),
