@@ -72,6 +72,19 @@ void main() {
     expect(result.aliases.single.name, 'alice.example');
   });
 
+  test('TXT records hold only octets', () {
+    for (final bytes in [
+      [256],
+      [-1],
+      [65, 0x1f600]
+    ]) {
+      expect(() => DnsTxtRecord(name: 'bob.example', ttl: 60, bytes: bytes),
+          throwsArgumentError);
+    }
+    expect(DnsTxtRecord(name: 'bob.example', ttl: 60, bytes: [0, 255]).bytes,
+        [0, 255]);
+  });
+
   test('resolver-asserted results name no local validator', () {
     final response = DnsResponse.fromJson({
       'Status': 0,

@@ -222,7 +222,11 @@ void main() {
       r'"\12"',
       r'"\1"',
       r'"\1x2"',
-      '"trailing\\'
+      '"trailing\\',
+      'lone \ud800',
+      '"lone \udc00"',
+      '"\\\ud800"',
+      '"\ud800 x"',
     ]) {
       expect(() => decodeDnsTxtBytes(s),
           throwsA(error(DnsError.malformedResponse)));

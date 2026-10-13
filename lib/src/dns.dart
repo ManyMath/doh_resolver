@@ -70,7 +70,11 @@ class DnsTxtRecord {
   final List<int> bytes;
   DnsTxtRecord(
       {required this.name, required this.ttl, required List<int> bytes})
-      : bytes = List.unmodifiable(bytes);
+      : bytes = List.unmodifiable(bytes) {
+    if (this.bytes.any((byte) => byte < 0 || byte > 255)) {
+      throw ArgumentError.value(bytes, 'bytes', 'TXT data must be octets');
+    }
+  }
 
   String get text {
     try {
@@ -330,9 +334,20 @@ List<int> decodeDnsTxtBytes(String value, {int maxPresentationLength = 8192}) {
     throw const DnsException(
         DnsError.responseTooLarge, 'TXT presentation exceeds limit');
   }
-  if (!value.startsWith('"')) return utf8.encode(value);
   const malformed =
       DnsException(DnsError.malformedResponse, 'Malformed TXT presentation');
+  // utf8.encode would silently turn these into U+FFFD, altering the octets.
+  for (var i = 0; i < value.length; i++) {
+    final unit = value.codeUnitAt(i);
+    if (unit & 0xfc00 == 0xdc00) throw malformed;
+    if (unit & 0xfc00 == 0xd800) {
+      if (i + 1 == value.length || value.codeUnitAt(i + 1) & 0xfc00 != 0xdc00) {
+        throw malformed;
+      }
+      i++;
+    }
+  }
+  if (!value.startsWith('"')) return utf8.encode(value);
   final bytes = <int>[];
   var i = 0;
   while (i < value.length) {
