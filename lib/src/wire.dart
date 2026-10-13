@@ -145,7 +145,10 @@ class _Question {
 class _WireMessage {
   final List<int> data;
   final questions = <_Question>[];
-  final _nameStarts = <int>{};
+  // Pointer targets are the starts of fully decoded names and their label
+  // suffixes. Caching the decoded suffix makes each pointer O(1) instead of
+  // re-walking a chain the sender controls.
+  final _names = <int, List<int>>{};
   int? optRdlengthOffset;
   int? optVersion;
   bool optIsLast = false;
@@ -370,35 +373,30 @@ class _WireMessage {
     _skip(data[_offset - 1], limit);
   }
 
-  // Pointers must move strictly backwards past every earlier jump, so loops are impossible.
+  // A pointer may only target a name decoded before this one began, so chains
+  // cannot loop and every jump costs one cached lookup.
   List<int> _name({int? limit, bool compressed = true}) {
     final name = <int>[];
+    final starts = <(int, int)>[];
     var at = _offset;
-    var bound = limit ?? data.length;
-    var lowest = _offset;
-    int? resume;
+    final bound = limit ?? data.length;
     while (true) {
       if (at >= bound) throw _malformed;
-      _nameStarts.add(at);
+      starts.add((at, name.length));
       final length = data[at];
       if (length == 0) {
         name.add(0);
-        if (name.length > 255) throw _malformed;
-        _offset = resume ?? at + 1;
-        return name;
+        at++;
+        break;
       }
       switch (length & 0xc0) {
         case 0xc0:
           if (!compressed || at + 1 >= bound) throw _malformed;
           final target = (length & 0x3f) << 8 | data[at + 1];
-          if (target < 12 ||
-              target >= lowest ||
-              !_nameStarts.contains(target)) {
-            throw _malformed;
-          }
-          resume ??= at + 2;
-          lowest = at = target;
-          bound = data.length;
+          final suffix = _names[target];
+          if (target >= _offset || suffix == null) throw _malformed;
+          name.addAll(suffix);
+          at += 2;
         case 0:
           if (at + 1 + length > bound) throw _malformed;
           name.add(length);
@@ -408,9 +406,22 @@ class _WireMessage {
           }
           if (name.length + 1 > 255) throw _malformed;
           at += 1 + length;
+          continue;
         default:
           throw _malformed;
       }
+      break;
     }
+    if (name.length > 255) throw _malformed;
+    final decoded = Uint8List.fromList(name);
+    for (final (offset, index) in starts) {
+      // Pointer offsets are 14 bits; views share one buffer rather than
+      // allocating a list for every suffix of a long name.
+      if (offset < 0x4000) {
+        _names[offset] = Uint8List.sublistView(decoded, index);
+      }
+    }
+    _offset = at;
+    return decoded;
   }
 }
