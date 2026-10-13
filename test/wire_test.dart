@@ -289,6 +289,65 @@ void main() {
     }
   });
 
+  group('wire TTL adjustment', () {
+    int ttlAt(List<int> message, int at) =>
+        message[at] << 24 |
+        message[at + 1] << 16 |
+        message[at + 2] << 8 |
+        message[at + 3];
+
+    test('ages record TTLs and leaves OPT and the input untouched', () {
+      final txt = wireRecord(pointer, 16, txtRdata('x'));
+      final reply = wireReply(answers: [txt, txt], additional: [txt]);
+      final original = [...reply];
+      final head = wireReply().length - wireOpt().length;
+      final ttls = [
+        head + 6,
+        head + txt.length + 6,
+        head + 2 * txt.length + 6,
+      ];
+      final aged = adjustDnsWireTtls(reply, age: const Duration(seconds: 25));
+      expect([for (final at in ttls) ttlAt(aged, at)], [35, 35, 35]);
+      expect(aged.sublist(aged.length - wireOpt().length), wireOpt());
+      expect(reply, original);
+      validateDnsWireResponse(query, aged);
+      expect(
+          ttlAt(adjustDnsWireTtls(reply, age: const Duration(hours: 1)),
+              ttls.first),
+          0);
+    });
+
+    test('treats high-bit TTLs as zero', () {
+      final reply =
+          wireReply(answers: [wireRecord(pointer, 16, txtRdata('x'))]);
+      final at = wireReply().length - wireOpt().length + 6;
+      reply[at] = 0x80;
+      expect(ttlAt(adjustDnsWireTtls(reply, age: Duration.zero), at), 0);
+    });
+
+    test('rejects malformed messages and negative ages', () {
+      expect(() => adjustDnsWireTtls([0, 1, 2], age: Duration.zero),
+          throwsA(isA<DnsMalformedResponseException>()));
+      final empty = wireHeader(flags: 0x8180, qd: 0);
+      expect(() => adjustDnsWireTtls(empty, age: const Duration(seconds: -1)),
+          throwsArgumentError,
+          reason: 'even with no TTL to adjust');
+    });
+  });
+
+  test('effectiveDnsTtl applies RFC 2181 and the HTTP age', () {
+    expect(effectiveDnsTtl(600), 600);
+    expect(effectiveDnsTtl(600, age: const Duration(seconds: 250)), 350);
+    expect(effectiveDnsTtl(60, age: const Duration(seconds: 61)), 0);
+    expect(effectiveDnsTtl(0x7fffffff), 0x7fffffff);
+    expect(effectiveDnsTtl(0x80000000), 0);
+    for (final ttl in [-1, 0x100000000]) {
+      expect(() => effectiveDnsTtl(ttl), throwsArgumentError);
+    }
+    expect(() => effectiveDnsTtl(1, age: const Duration(seconds: -1)),
+        throwsArgumentError);
+  });
+
   group('query padding', () {
     test('pads a final OPT record to a 128-octet block', () {
       final padded = padDnsWireQuery(query);

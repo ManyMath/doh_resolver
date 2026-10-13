@@ -30,6 +30,27 @@ void validateDnsWireResponse(List<int> query, List<int> response) {
   }
 }
 
+/// A copy of wire [response] with every record TTL replaced by its
+/// [effectiveDnsTtl] after [age], such as `DohHttpResponse.age`. OPT is left
+/// alone: its TTL field carries EDNS flags. RRSIG validation is unaffected
+/// because it uses the signature's Original TTL, but SIG(0) and TSIG
+/// transaction signatures cover the whole message, so verify them first.
+List<int> adjustDnsWireTtls(List<int> response, {required Duration age}) {
+  if (age < Duration.zero) throw ArgumentError.value(age, 'age');
+  final message = _WireMessage.parse(response);
+  final adjusted = Uint8List.fromList(response);
+  for (final at in message.ttlOffsets) {
+    final ttl = message._u16(at) << 16 | message._u16(at + 2);
+    final value = effectiveDnsTtl(ttl, age: age);
+    adjusted
+      ..[at] = value >> 24
+      ..[at + 1] = value >> 16 & 0xff
+      ..[at + 2] = value >> 8 & 0xff
+      ..[at + 3] = value & 0xff;
+  }
+  return List<int>.unmodifiable(adjusted);
+}
+
 List<int> padDnsWireQuery(List<int> query, {int blockSize = 128}) {
   if (blockSize < 1 || blockSize > 512) {
     throw ArgumentError.value(blockSize, 'blockSize');
@@ -106,6 +127,7 @@ class _WireMessage {
   bool optIsLast = false;
   bool optHasPadding = false;
   bool isSigned = false;
+  final ttlOffsets = <int>[];
   int _offset = 12;
 
   _WireMessage._(this.data);
@@ -157,6 +179,7 @@ class _WireMessage {
     final start = _offset + 10;
     final end = start + rdlength;
     if (end > data.length) throw _malformed;
+    if (type != 41) ttlOffsets.add(_offset + 4);
     // SIG(0) and TSIG sign the header, including the ID.
     if (additional && (type == 24 || type == 250)) isSigned = true;
     if (type == 41) {

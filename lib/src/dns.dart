@@ -75,8 +75,14 @@ final class DnsTimeoutException extends DnsException {
 
 final _label = RegExp(r'^[a-z0-9_-]+$');
 
-// RFC 2181 §8: a received TTL with the most significant bit set means zero.
-int _ttl(int ttl) => ttl > 0x7fffffff ? 0 : ttl;
+/// The remaining lifetime of a received DNS [ttl], in seconds: zero when its
+/// most significant bit is set (RFC 2181 §8), reduced by the HTTP cache [age]
+/// (RFC 8484 §5.1), and never negative.
+int effectiveDnsTtl(int ttl, {Duration age = Duration.zero}) {
+  if (ttl < 0 || ttl > 0xffffffff) throw ArgumentError.value(ttl, 'ttl');
+  if (age < Duration.zero) throw ArgumentError.value(age, 'age');
+  return max(0, (ttl > 0x7fffffff ? 0 : ttl) - age.inSeconds);
+}
 
 String normalizeDnsName(String name) {
   if (name.codeUnits.any((c) => c > 127)) {
@@ -179,7 +185,10 @@ final class DnsValidationIssuer {
             'Invalid validated CNAME chain');
       }
       chain.add(DnsRecord(
-          name: owner, type: 5, ttl: _ttl(alias.ttl), data: alias.data));
+          name: owner,
+          type: 5,
+          ttl: effectiveDnsTtl(alias.ttl),
+          data: alias.data));
       owner = normalizeDnsName(alias.data);
       if (!seen.add(owner)) {
         throw const DnsAliasLoopException('CNAME loop');
@@ -195,7 +204,10 @@ final class DnsValidationIssuer {
         resolver,
         [
           for (final r in records)
-            DnsTxtRecord(name: canonicalName, ttl: _ttl(r.ttl), bytes: r.bytes)
+            DnsTxtRecord(
+                name: canonicalName,
+                ttl: effectiveDnsTtl(r.ttl),
+                bytes: r.bytes)
         ],
         chain,
         null,
@@ -301,7 +313,7 @@ class DnsResponse {
       answers.add(DnsRecord(
           name: name(a['name']),
           type: a['type'] as int,
-          ttl: max(0, _ttl(a['TTL'] as int) - age.inSeconds),
+          ttl: effectiveDnsTtl(a['TTL'] as int, age: age),
           data: a['data'] as String));
     }
     return DnsResponse._(
