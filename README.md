@@ -52,3 +52,9 @@ RFC 8484 requires DNS TTLs to be reduced by the HTTP `Age` of a response.
 `DohResolver` applies this to JSON answers, flooring TTLs at zero. Wire-format
 bodies are returned unmodified; callers must subtract `DohHttpResponse.age`
 from any TTL they decode.
+
+## Development
+
+Run every pre-merge check (format, analyze, tests, publish dry-run) on any
+platform with `dart tool/check.dart`. Live resolver tests are skipped unless
+`DOH_LIVE_TESTS=1` is set.

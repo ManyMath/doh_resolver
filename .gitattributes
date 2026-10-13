@@ -1,0 +1,2 @@
+# Keep LF on every platform so dart format and byte-exact tests agree.
+* text=auto eol=lf
