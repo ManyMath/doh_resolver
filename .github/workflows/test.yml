@@ -16,4 +16,16 @@ jobs:
       - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d
         with:
           sdk: ${{ matrix.sdk }}
+      # doh_transport is not on pub.dev yet; resolve it from a sibling clone
+      # the same way the README describes for development.
+      - run: git clone --depth 1 --branch main https://github.com/cypherstack/doh_transport.git ../doh_transport
+        shell: bash
+      - run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            doh_transport:
+              path: ../doh_transport
+          YAML
+        shell: bash
       - run: dart tool/check.dart
+        working-directory: packages/doh_resolver

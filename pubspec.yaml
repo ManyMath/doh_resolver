@@ -1,12 +1,6 @@
-name: doh_resolver
-description: Bounded DNS over HTTPS JSON and wire queries with explicit transport, authentication evidence, and strict TXT resolution.
-version: 0.0.1
-repository: https://github.com/cypherstack/doh_resolver
+name: doh_resolver_workspace
+publish_to: none
 environment:
   sdk: ">=3.5.0 <4.0.0"
-dependencies:
-  socks_socket: ^2.0.0
-dev_dependencies:
-  lints: ^5.0.0
-  pointycastle: ^4.0.0
-  test: ^1.25.0
+workspace:
+  - packages/doh_resolver

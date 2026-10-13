@@ -1,59 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:doh_transport/doh_transport.dart';
+
 import 'dns.dart';
-import 'wire.dart';
-
-/// A started request. Starting never throws: every failure, including
-/// invalid input, completes [result] with a [DnsException].
-class DnsOperation<T> {
-  /// Completes with the outcome. Like any [Future], an error nobody listens
-  /// to is reported as uncaught; cancelling does not consume it, so attach a
-  /// handler or call [FutureExtensions.ignore] on results you discard.
-  final Future<T> result;
-
-  /// Fails [result] with [DnsCancelledException] unless it has already
-  /// completed, and releases the work. Safe to call repeatedly.
-  final void Function() cancel;
-  const DnsOperation(this.result, this.cancel);
-
-  /// An operation that has already failed with [error].
-  DnsOperation.failed(DnsException error) : this(Future.error(error), _noop);
-}
-
-void _noop() {}
-
-/// A complete HTTPS response from a DoH resolver.
-class DohHttpResponse {
-  final int statusCode;
-  final List<int> body;
-
-  /// Time the response spent in HTTP caches, from its `Age` header. DNS TTLs
-  /// must be reduced by it; see [effectiveDnsTtl] and [adjustDnsWireTtls].
-  final Duration age;
-  DohHttpResponse(this.statusCode, List<int> body, {this.age = Duration.zero})
-      : body = List.unmodifiable(body) {
-    if (age < Duration.zero) throw ArgumentError.value(age, 'age');
-  }
-}
-
-/// Sends DoH JSON GET requests.
-///
-/// Implementations must deliver every failure through the returned
-/// [DnsOperation.result], bound the body to `maxResponseBytes`, and make
-/// `cancel` idempotent. [DohResolver] cancels only operations that have not
-/// completed.
-abstract interface class DohTransport {
-  DnsOperation<DohHttpResponse> start(Uri uri, {required int maxResponseBytes});
-}
-
-/// Sends RFC 8484 wire-format queries; see [DohTransport] for the contract.
-abstract interface class DohWireTransport {
-  /// Sends wire [query]. With [preserveMessage], the query is sent and the
-  /// response returned exactly as exchanged, with no padding or ID rewrite,
-  /// for transaction signatures such as SIG(0) that cover both messages.
-  DnsOperation<DohHttpResponse> startWire(Uri uri, List<int> query,
-      {required int maxResponseBytes, bool preserveMessage = false});
-}
 
 /// Looks up TXT records through a DoH JSON API and accepts only answers the
 /// resolver asserts are DNSSEC-authenticated.

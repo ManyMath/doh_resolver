@@ -40,7 +40,7 @@ class FakeTransport implements DohTransport {
 }
 
 void main() {
-  test('only terminal-owner TXT answers are accepted; evidence retained', () {
+  test('only terminal-owner TXT answers are accepted; response retained', () {
     final response = decode(reply(answers: [
       rr('alice.example.', 5, 'pay.example.'),
       rr('pay.example.', 16, 'one'),
@@ -86,22 +86,10 @@ void main() {
         throwsA(isA<DnsTransportException>()
             .having((e) => e.httpStatus, 'httpStatus', 503)));
   });
-  test('the exception hierarchy is sealed and exhaustive', () {
-    String describe(DnsException error) => switch (error) {
-          DnsInvalidNameException() => 'name',
-          DnsInvalidQueryException() => 'query',
-          DnsMalformedResponseException() => 'malformed',
-          DnsResponseTooLargeException() => 'large',
-          DnsQueryFailedException(:final rcode) => 'rcode $rcode',
-          DnsAuthenticationUnavailableException() => 'unauthenticated',
-          DnsQuestionMismatchException() => 'mismatch',
-          DnsAliasException() => 'alias',
-          DnsTransportException(:final httpStatus) => 'http $httpStatus',
-          DnsCancelledException() => 'cancelled',
-          DnsTimeoutException() => 'timeout',
-        };
-    expect(describe(const DnsAliasLoopException('loop')), 'alias');
-    expect(describe(const DnsQueryFailedException('x', rcode: 3)), 'rcode 3');
+  test('the open exception root catches transport and resolution leaves', () {
+    expect(const DnsAliasLoopException('loop'), isA<DnsException>());
+    expect(const DnsTimeoutException('late'), isA<DnsException>());
+    expect(const DnsQueryFailedException('x', rcode: 3).rcode, 3);
     expect(const DnsTimeoutException('late').toString(),
         'DnsTimeoutException: late');
   });
@@ -283,19 +271,8 @@ void main() {
     expect(() => decodeDnsTxtBytes('a' * 8193, DnsTxtFormat.quoted),
         throwsA(isA<DnsResponseTooLargeException>()));
   });
-  test('DNS names allow service labels without permitting alias syntax', () {
-    expect(normalizeDnsName('_Dmarc.Example.'), '_dmarc.example');
-    for (final name in [
-      'a@b.example',
-      'K.example',
-      'a..example',
-      'https://example.org'
-    ]) {
-      expect(() => normalizeDnsName(name),
-          throwsA(isA<DnsInvalidNameException>()));
-    }
-  });
-  test('requests privacy flags and propagates evidence', () async {
+  test('requests privacy flags and propagates the authenticated result',
+      () async {
     final transport = FakeTransport();
     final resolver = DohResolver(transport: transport);
     final query = resolver.startTxtLookup('alice.example');
