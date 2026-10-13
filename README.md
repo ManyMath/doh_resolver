@@ -97,7 +97,10 @@ verifies the requested host name.
 Every failure is a subtype of the sealed `DnsException`, so you can catch one
 case, all CNAME failures through `DnsAliasException`, or switch over every case
 exhaustively. `DnsQueryFailedException` carries the DNS `rcode`, and
-`DnsTransportException` carries `httpStatus` for a non-200 response.
+`DnsTransportException` carries `httpStatus` for a non-200 response. The one
+open subtype is `DnsAuthenticationUnavailableException`: a local validator
+extends it to say why it found no secure answer, and an exhaustive switch
+still sees that as authentication being unavailable.
 
 Starting an operation never throws: invalid names, URIs and wire queries, a
 closed transport and a full queue all complete `DnsOperation.result` with a
