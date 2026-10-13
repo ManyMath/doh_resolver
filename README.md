@@ -77,7 +77,11 @@ verifies the requested host name.
 - **Connection reuse.** JSON requests never share connections. Wire queries to
   the same origin do, unless a `proxy` is set: lookups sharing a connection can
   be linked by the resolver, so proxied transports reuse only with
-  `reuseConnections: true`. The transport gives each exchange a random ID that
+  `reuseConnections: true`. Pass it when the transport already lives for one
+  lookup on its own isolated stream, as with `SocksCredentials.isolation`:
+  those queries share a circuit anyway, and a wire lookup makes several
+  requests, so each new Tor stream and TLS handshake is pure cost. The
+  transport gives each exchange a random ID that
   is unique on its connection and restores the caller's ID in the response, so
   callers may send ID 0 as RFC 8484 recommends. SIG(0)- and TSIG-signed queries
   are sent byte-for-byte, because their signatures cover the header. Pass
