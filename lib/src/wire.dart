@@ -2,22 +2,20 @@ import 'dart:typed_data';
 
 import 'dns.dart';
 
-const _malformed =
-    DnsException(DnsError.malformedResponse, 'Malformed DNS wire message');
-const _mismatch = DnsException(
-    DnsError.questionMismatch, 'DNS wire response does not match query');
+const _malformed = DnsMalformedResponseException('Malformed DNS wire message');
+const _mismatch =
+    DnsQuestionMismatchException('DNS wire response does not match query');
 
 /// This is framing only: it never makes the answer trustworthy.
 void validateDnsWireResponse(List<int> query, List<int> response) {
   final sent = _parseOrNull(query);
   if (sent == null || sent.isResponse) {
-    throw ArgumentError('Invalid DNS wire query');
+    throw const DnsInvalidQueryException('Invalid DNS wire query');
   }
   final reply = _WireMessage.parse(response);
   if (!reply.isResponse) throw _malformed;
   if (reply.flags & 0x0200 != 0) {
-    throw const DnsException(
-        DnsError.malformedResponse, 'Truncated DNS wire response');
+    throw const DnsMalformedResponseException('Truncated DNS wire response');
   }
   if (reply.id != sent.id ||
       reply.opcode != sent.opcode ||
@@ -38,7 +36,7 @@ List<int> padDnsWireQuery(List<int> query, {int blockSize = 128}) {
   }
   final message = _parseOrNull(query);
   if (message == null || message.isResponse) {
-    throw ArgumentError('Invalid DNS wire query');
+    throw const DnsInvalidQueryException('Invalid DNS wire query');
   }
   final rdlength = message.optRdlengthOffset;
   if (rdlength == null || !message.optIsLast || message.optHasPadding) {
@@ -64,7 +62,7 @@ List<int> padDnsWireQuery(List<int> query, {int blockSize = 128}) {
 List<int> checkedDnsWireQuery(List<int> query) {
   final message = _parseOrNull(query);
   if (message == null || message.isResponse) {
-    throw ArgumentError('Invalid DNS wire query');
+    throw const DnsInvalidQueryException('Invalid DNS wire query');
   }
   return List<int>.unmodifiable(query);
 }

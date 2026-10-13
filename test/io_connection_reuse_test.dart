@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:doh_resolver/doh_resolver_io.dart';
 import 'package:test/test.dart';
 
-import 'dns_test.dart' show error;
 import 'support/dns_wire.dart';
 import 'support/scripted_server.dart';
 import 'support/test_pki.dart';
@@ -99,42 +98,42 @@ void main() {
         ) in [
       (
         'an empty-body 404',
-        DnsError.transport,
+        isA<DnsTransportException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async =>
             e.send(httpResponse([], status: 404))
       ),
       (
         'a JSON-typed reply',
-        DnsError.malformedResponse,
+        isA<DnsMalformedResponseException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async =>
             e.send(httpResponse(wireReply(id: e.id), type: 'application/json'))
       ),
       (
         'a buffered reply with another ID',
-        DnsError.questionMismatch,
+        isA<DnsQuestionMismatchException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async =>
             e.send(httpResponse(wireReply(id: e.id ^ 1)))
       ),
       (
         'a chunked reply with another ID',
-        DnsError.questionMismatch,
+        isA<DnsQuestionMismatchException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async =>
             e.send(httpResponse(wireReply(id: e.id ^ 1), chunked: true))
       ),
       (
         'a chunked reply over the size limit',
-        DnsError.responseTooLarge,
+        isA<DnsResponseTooLargeException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async =>
             e.send(httpResponse(List.filled(600, 0), chunked: true))
       ),
       (
         'a timed-out exchange answered late with an extra response',
-        DnsError.timedOut,
+        isA<DnsTimeoutException>(),
         false,
         (ScriptedExchange e, Completer<void> _) async {
           await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -144,7 +143,7 @@ void main() {
       ),
       (
         'a cancelled exchange answered late with an extra response',
-        DnsError.cancelled,
+        isA<DnsCancelledException>(),
         true,
         (ScriptedExchange e, Completer<void> ready) async {
           ready.complete();
@@ -155,7 +154,7 @@ void main() {
       ),
       (
         'a reply cancelled mid-body and then completed with an extra response',
-        DnsError.cancelled,
+        isA<DnsCancelledException>(),
         true,
         (ScriptedExchange e, Completer<void> ready) async {
           final reply = httpResponse(wireReply(id: e.id));
@@ -175,7 +174,7 @@ void main() {
         final t =
             transport(proxy, requestTimeout: const Duration(milliseconds: 300));
         final operation = start(t, 0x1111);
-        final failed = expectLater(operation.result, throwsA(error(code)));
+        final failed = expectLater(operation.result, throwsA(code));
         if (cancel) {
           await ready.future;
           operation.cancel();
@@ -199,7 +198,8 @@ void main() {
       final t = transport(proxy, maxConcurrentRequests: 2);
       final a = start(t, 1);
       final b = start(t, 2);
-      final aFailed = expectLater(a.result, throwsA(error(DnsError.cancelled)));
+      final aFailed =
+          expectLater(a.result, throwsA(isA<DnsCancelledException>()));
       await until(() => server.exchanges.length == 2);
       final held = server.exchanges.firstWhere((e) => e.id == 2);
       a.cancel();
@@ -362,13 +362,14 @@ void main() {
     final queued = start(t, 3);
     final failed = [
       for (final operation in [inFlight, queued])
-        expectLater(operation.result, throwsA(error(DnsError.cancelled)))
+        expectLater(operation.result, throwsA(isA<DnsCancelledException>()))
     ];
     await until(() => server.exchanges.length == 2);
     await t.close();
     await Future.wait(failed);
     await until(() => server.closed == 1);
-    await expectLater(start(t, 4).result, throwsA(error(DnsError.cancelled)));
+    await expectLater(
+        start(t, 4).result, throwsA(isA<DnsCancelledException>()));
     expect(server.connections, 1);
   });
 
@@ -379,7 +380,7 @@ void main() {
     addTearDown(proxy.close);
     final t = transport(proxy);
     final failed =
-        expectLater(start(t, 1).result, throwsA(error(DnsError.cancelled)));
+        expectLater(start(t, 1).result, throwsA(isA<DnsCancelledException>()));
     await proxy.connected.future;
     await t.close();
     await failed;

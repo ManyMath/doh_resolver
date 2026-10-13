@@ -26,7 +26,19 @@ reused because JSON has no transaction identifier. Wire connections are reused
 only for the same HTTPS origin and while transaction IDs remain unique on that
 connection; malformed, cancelled, timed-out, or failed exchanges retire the
 connection. `maxConcurrentRequests` and `maxQueuedRequests` bound admitted
-work; a full queue fails new operations with `DnsError.transport`.
+work; a full queue fails new operations with `DnsTransportException`.
+
+## Errors
+
+Every failure is a subtype of the sealed `DnsException`, so callers can catch
+a specific case or switch over all of them exhaustively. `DnsQueryFailedException`
+carries the DNS `rcode`; `DnsTransportException` carries `httpStatus` when the
+resolver returned a non-200 response.
+
+Starting an operation never throws. Invalid names, URIs and wire queries,
+a closed transport, and a full queue all complete `DnsOperation.result` with
+a `DnsException`. `ArgumentError` is reserved for invalid constructor
+configuration.
 
 ## Cache age
 

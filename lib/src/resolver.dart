@@ -2,11 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'dns.dart';
 
+/// A started request. Starting never throws: every failure, including
+/// invalid input, completes [result] with a [DnsException].
 class DnsOperation<T> {
   final Future<T> result;
   final void Function() cancel;
   const DnsOperation(this.result, this.cancel);
+  DnsOperation.failed(DnsException error) : this(Future.error(error), _noop);
 }
+
+void _noop() {}
 
 class DohHttpResponse {
   final int statusCode;
@@ -55,7 +60,11 @@ class DohResolver {
       startTxtLookup(domain).result;
 
   DnsOperation<AuthenticatedTxtResult> startTxtLookup(String domain) {
-    domain = normalizeDnsName(domain);
+    try {
+      domain = normalizeDnsName(domain);
+    } on DnsException catch (error) {
+      return DnsOperation.failed(error);
+    }
     final parameters = {
       ...endpoint.queryParameters,
       'name': '$domain.',
@@ -69,35 +78,40 @@ class DohResolver {
     final length =
         endpoint.replace(queryParameters: parameters).toString().length;
     parameters['random_padding'] = 'X' * (1 + (128 - length % 128) % 128);
-    final operation = transport.start(
-        endpoint.replace(queryParameters: parameters),
-        maxResponseBytes: maxResponseBytes);
+    final DnsOperation<DohHttpResponse> operation;
+    try {
+      operation = transport.start(endpoint.replace(queryParameters: parameters),
+          maxResponseBytes: maxResponseBytes);
+    } on DnsException catch (error) {
+      return DnsOperation.failed(error);
+    } catch (_) {
+      return DnsOperation.failed(
+          const DnsTransportException('DNS transport failed'));
+    }
     final result = Completer<AuthenticatedTxtResult>();
     late Timer timer;
-    void release() {
+    // Only an unfinished transport operation is cancelled; once its result
+    // has completed, the transport owns no further work for this lookup.
+    void abort(DnsException error) {
+      if (result.isCompleted) return;
+      result.completeError(error);
       timer.cancel();
       try {
         operation.cancel();
       } catch (_) {}
     }
 
-    void abort(DnsError code) {
-      if (result.isCompleted) return;
-      result.completeError(DnsException(code, 'DNS query ${code.name}'));
-      release();
-    }
-
-    timer = Timer(timeout, () => abort(DnsError.timedOut));
+    timer = Timer(
+        timeout, () => abort(const DnsTimeoutException('DNS query timed out')));
     operation.result.then((response) {
       if (result.isCompleted) return;
       try {
         if (response.statusCode != 200) {
-          throw DnsException(DnsError.transport, 'DNS HTTPS request failed',
-              responseCode: response.statusCode);
+          throw DnsTransportException('DNS HTTPS request failed',
+              httpStatus: response.statusCode);
         }
         if (response.body.length > maxResponseBytes) {
-          throw const DnsException(
-              DnsError.responseTooLarge, 'DNS body exceeds limit');
+          throw const DnsResponseTooLargeException('DNS body exceeds limit');
         }
         final body = jsonDecode(utf8.decode(response.body));
         result.complete(
@@ -107,23 +121,27 @@ class DohResolver {
         result.completeError(error, stack);
       } on FormatException catch (_, stack) {
         result.completeError(
-            const DnsException(
-                DnsError.malformedResponse, 'Invalid DNS JSON encoding'),
+            const DnsMalformedResponseException('Invalid DNS JSON encoding'),
+            stack);
+      } catch (_, stack) {
+        // The deadline is cancelled below, so every outcome must complete here.
+        result.completeError(
+            const DnsMalformedResponseException('Unreadable DNS response'),
             stack);
       } finally {
-        release();
+        timer.cancel();
       }
     }, onError: (Object error, StackTrace stack) {
-      release();
+      timer.cancel();
       if (!result.isCompleted) {
         result.completeError(
             error is DnsException
                 ? error
-                : const DnsException(
-                    DnsError.transport, 'DNS transport failed'),
+                : const DnsTransportException('DNS transport failed'),
             stack);
       }
     });
-    return DnsOperation(result.future, () => abort(DnsError.cancelled));
+    return DnsOperation(result.future,
+        () => abort(const DnsCancelledException('DNS query cancelled')));
   }
 }

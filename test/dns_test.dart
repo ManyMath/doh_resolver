@@ -22,8 +22,6 @@ Map<String, Object?> rr(String name, int type, String data) => {
     };
 DnsResponse decode(Object? json) => DnsResponse.fromJson(json,
     resolver: Uri.parse('https://dns.example/resolve'));
-Matcher error(DnsError code) =>
-    isA<DnsException>().having((e) => e.code, 'code', code);
 
 class FakeTransport implements DohTransport {
   final completer = Completer<DohHttpResponse>();
@@ -64,14 +62,43 @@ void main() {
         reply()..[field] = field != 'AD'
       ]) {
         expect(() => decode(body).authenticatedTxt('alice.example'),
-            throwsA(error(DnsError.authenticationUnavailable)));
+            throwsA(isA<DnsAuthenticationUnavailableException>()));
       }
     });
   }
   test('DNS error preserves status without inferring bogus or unsigned', () {
     expect(
         () => decode(reply()..['Status'] = 2).authenticatedTxt('alice.example'),
-        throwsA(error(DnsError.queryFailed)));
+        throwsA(
+            isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
+  });
+  test('HTTP failures carry the status', () async {
+    final transport = FakeTransport();
+    final result = DohResolver(transport: transport).lookupTxt('alice.example');
+    transport.completer.complete(DohHttpResponse(503, []));
+    await expectLater(
+        result,
+        throwsA(isA<DnsTransportException>()
+            .having((e) => e.httpStatus, 'httpStatus', 503)));
+  });
+  test('the exception hierarchy is sealed and exhaustive', () {
+    String describe(DnsException error) => switch (error) {
+          DnsInvalidNameException() => 'name',
+          DnsInvalidQueryException() => 'query',
+          DnsMalformedResponseException() => 'malformed',
+          DnsResponseTooLargeException() => 'large',
+          DnsQueryFailedException(:final rcode) => 'rcode $rcode',
+          DnsAuthenticationUnavailableException() => 'unauthenticated',
+          DnsQuestionMismatchException() => 'mismatch',
+          DnsAliasException() => 'alias',
+          DnsTransportException(:final httpStatus) => 'http $httpStatus',
+          DnsCancelledException() => 'cancelled',
+          DnsTimeoutException() => 'timeout',
+        };
+    expect(describe(const DnsAliasLoopException('loop')), 'alias');
+    expect(describe(const DnsQueryFailedException('x', rcode: 3)), 'rcode 3');
+    expect(const DnsTimeoutException('late').toString(),
+        'DnsTimeoutException: late');
   });
   for (final questions in [
     <Object>[],
@@ -90,7 +117,7 @@ void main() {
       expect(
           () => decode(reply()..['Question'] = questions)
               .authenticatedTxt('alice.example'),
-          throwsA(error(DnsError.questionMismatch)));
+          throwsA(isA<DnsQuestionMismatchException>()));
     });
   }
   test('no answers is distinct from DNS failure', () {
@@ -104,7 +131,7 @@ void main() {
     expect(
         () => decode(reply(answers: [rr('alice.example', 5, 'alice.example')]))
             .authenticatedTxt('alice.example'),
-        throwsA(error(DnsError.aliasLoop)));
+        throwsA(isA<DnsAliasLoopException>()));
     for (final records in [
       [rr('alice.example', 5, 'pay.example'), rr('alice.example', 16, 'txt')],
       [
@@ -115,7 +142,7 @@ void main() {
       expect(
           () =>
               decode(reply(answers: records)).authenticatedTxt('alice.example'),
-          throwsA(error(DnsError.aliasAmbiguous)));
+          throwsA(isA<DnsAliasAmbiguousException>()));
     }
     final chain = [
       rr('alice.example', 5, 'hop0.example'),
@@ -124,7 +151,7 @@ void main() {
     ];
     expect(
         () => decode(reply(answers: chain)).authenticatedTxt('alice.example'),
-        throwsA(error(DnsError.aliasTooLong)));
+        throwsA(isA<DnsAliasTooLongException>()));
   });
   test('rejects invalid TTLs, names, record data, types and response shape',
       () {
@@ -149,7 +176,7 @@ void main() {
     expect(
         () => decode(reply(
             answers: List.generate(65, (_) => rr('alice.example', 16, 'x')))),
-        throwsA(error(DnsError.responseTooLarge)));
+        throwsA(isA<DnsResponseTooLargeException>()));
   });
   test('TXT chunks and decimal UTF-8 octets are decoded without loss', () {
     expect(
@@ -161,7 +188,7 @@ void main() {
     expect(decodeDnsTxtBytes(r'"\255"'), [255]);
     expect(utf8.decode(decodeDnsTxtBytes('"\\😀"')), '😀');
     expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
-        throwsA(error(DnsError.malformedResponse)));
+        throwsA(isA<DnsMalformedResponseException>()));
   });
   test('validated evidence enforces DNS TTL bounds', () {
     final issuer = DnsValidationIssuer('test');
@@ -174,7 +201,7 @@ void main() {
                   records: [
                     DnsTxtRecord(name: 'alice.example', ttl: ttl, bytes: [1])
                   ]),
-          throwsA(error(DnsError.malformedResponse)));
+          throwsA(isA<DnsMalformedResponseException>()));
     }
     expect(
         issuer
@@ -229,10 +256,10 @@ void main() {
       '"\ud800 x"',
     ]) {
       expect(() => decodeDnsTxtBytes(s),
-          throwsA(error(DnsError.malformedResponse)));
+          throwsA(isA<DnsMalformedResponseException>()));
     }
     expect(() => decodeDnsTxtBytes('a' * 8193),
-        throwsA(error(DnsError.responseTooLarge)));
+        throwsA(isA<DnsResponseTooLargeException>()));
   });
   test('DNS names allow service labels without permitting alias syntax', () {
     expect(normalizeDnsName('_Dmarc.Example.'), '_dmarc.example');
@@ -242,8 +269,8 @@ void main() {
       'a..example',
       'https://example.org'
     ]) {
-      expect(
-          () => normalizeDnsName(name), throwsA(error(DnsError.invalidName)));
+      expect(() => normalizeDnsName(name),
+          throwsA(isA<DnsInvalidNameException>()));
     }
   });
   test('requests privacy flags and propagates evidence', () async {
@@ -263,7 +290,9 @@ void main() {
         .complete(DohHttpResponse(200, utf8.encode(jsonEncode(reply()))));
     expect((await query.result).records.single.text,
         'oa1:xmr recipient_address=valid;');
-    expect(transport.cancelled, isTrue);
+    query.cancel();
+    expect(transport.cancelled, isFalse,
+        reason: 'a completed transport operation is never cancelled');
   });
   test('padding hides name length and keeps endpoint parameters', () {
     final lengths = <int>{};
@@ -279,12 +308,32 @@ void main() {
     }
     expect(lengths, {128});
   });
+  test('an invalid name fails the result without reaching the transport',
+      () async {
+    final transport = FakeTransport();
+    final operation =
+        DohResolver(transport: transport).startTxtLookup('a..example');
+    await expectLater(
+        operation.result, throwsA(isA<DnsInvalidNameException>()));
+    operation.cancel();
+    expect(transport.uri, isNull);
+  });
+  test('a transport that throws on start fails the result', () async {
+    for (final (thrown, expected) in [
+      (const DnsCancelledException('closed'), isA<DnsCancelledException>()),
+      (StateError('broken'), isA<DnsTransportException>()),
+    ]) {
+      final result = DohResolver(transport: _ThrowingTransport(thrown))
+          .lookupTxt('a.example');
+      await expectLater(result, throwsA(expected));
+    }
+  });
   test('a throwing transport cancel cannot escape the deadline', () async {
     final transport = FakeTransport()..throwOnCancel = true;
     final query = DohResolver(
             transport: transport, timeout: const Duration(milliseconds: 20))
         .startTxtLookup('alice.example');
-    await expectLater(query.result, throwsA(error(DnsError.timedOut)));
+    await expectLater(query.result, throwsA(isA<DnsTimeoutException>()));
     query.cancel();
   });
   for (final cancel in [true, false]) {
@@ -295,8 +344,11 @@ void main() {
       final resolver = DohResolver(
           transport: transport, timeout: const Duration(milliseconds: 30));
       final query = resolver.startTxtLookup('alice.example');
-      final failed = expectLater(query.result,
-          throwsA(error(cancel ? DnsError.cancelled : DnsError.timedOut)));
+      final failed = expectLater(
+          query.result,
+          throwsA(cancel
+              ? isA<DnsCancelledException>()
+              : isA<DnsTimeoutException>()));
       if (cancel) query.cancel();
       await failed;
       expect(transport.cancelled, isTrue);
@@ -325,6 +377,13 @@ void main() {
     expect(() => DohHttpResponse(200, [], age: const Duration(seconds: -1)),
         throwsArgumentError);
   });
+  test('an unexpected parsing error still completes the lookup', () async {
+    final transport = FakeTransport();
+    final result = DohResolver(transport: transport).lookupTxt('alice.example');
+    transport.completer.complete(_ThrowingResponse());
+    await expectLater(result.timeout(const Duration(seconds: 1)),
+        throwsA(isA<DnsMalformedResponseException>()));
+  });
   test('rejects HTTP, JSON and injected response limit violations', () async {
     for (final response in [
       DohHttpResponse(302, []),
@@ -336,7 +395,30 @@ void main() {
           DohResolver(transport: transport).lookupTxt('alice.example');
       transport.completer.complete(response);
       await expectLater(result, throwsA(isA<DnsException>()));
-      expect(transport.cancelled, isTrue);
+      expect(transport.cancelled, isFalse);
     }
+    final failing = FakeTransport();
+    final failed = DohResolver(transport: failing).lookupTxt('alice.example');
+    failing.completer.completeError(StateError('down'));
+    await expectLater(failed, throwsA(isA<DnsTransportException>()));
+    expect(failing.cancelled, isFalse);
   });
+}
+
+class _ThrowingResponse implements DohHttpResponse {
+  @override
+  int get statusCode => 200;
+  @override
+  Duration get age => Duration.zero;
+  @override
+  List<int> get body => throw StateError('broken body');
+}
+
+class _ThrowingTransport implements DohTransport {
+  final Object error;
+  _ThrowingTransport(this.error);
+  @override
+  DnsOperation<DohHttpResponse> start(Uri uri,
+          {required int maxResponseBytes}) =>
+      throw error;
 }

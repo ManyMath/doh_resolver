@@ -1,29 +1,76 @@
 import 'dart:convert';
 import 'dart:math';
 
-enum DnsError {
-  invalidName,
-  malformedResponse,
-  responseTooLarge,
-  queryFailed,
-  authenticationUnavailable,
-  questionMismatch,
-  aliasLoop,
-  aliasAmbiguous,
-  aliasTooLong,
-  noRecords,
-  transport,
-  cancelled,
-  timedOut,
+/// Every failure this package reports. Switch over it exhaustively, or catch
+/// a specific subtype.
+sealed class DnsException implements Exception {
+  final String message;
+  const DnsException(this.message);
+  @override
+  String toString() => '$runtimeType: $message';
 }
 
-class DnsException implements Exception {
-  final DnsError code;
-  final String message;
-  final int? responseCode;
-  const DnsException(this.code, this.message, {this.responseCode});
-  @override
-  String toString() => 'DnsException(${code.name}): $message';
+final class DnsInvalidNameException extends DnsException {
+  const DnsInvalidNameException(super.message);
+}
+
+/// A caller-supplied wire query or request URI was unusable.
+final class DnsInvalidQueryException extends DnsException {
+  const DnsInvalidQueryException(super.message);
+}
+
+final class DnsMalformedResponseException extends DnsException {
+  const DnsMalformedResponseException(super.message);
+}
+
+final class DnsResponseTooLargeException extends DnsException {
+  const DnsResponseTooLargeException(super.message);
+}
+
+/// The resolver answered with a non-zero DNS RCODE, such as 3 (NXDOMAIN).
+final class DnsQueryFailedException extends DnsException {
+  final int rcode;
+  const DnsQueryFailedException(super.message, {required this.rcode});
+}
+
+final class DnsAuthenticationUnavailableException extends DnsException {
+  const DnsAuthenticationUnavailableException(super.message);
+}
+
+final class DnsQuestionMismatchException extends DnsException {
+  const DnsQuestionMismatchException(super.message);
+}
+
+/// The answer's CNAME chain could not be followed to a single owner.
+sealed class DnsAliasException extends DnsException {
+  const DnsAliasException(super.message);
+}
+
+final class DnsAliasLoopException extends DnsAliasException {
+  const DnsAliasLoopException(super.message);
+}
+
+final class DnsAliasAmbiguousException extends DnsAliasException {
+  const DnsAliasAmbiguousException(super.message);
+}
+
+final class DnsAliasTooLongException extends DnsAliasException {
+  const DnsAliasTooLongException(super.message);
+}
+
+/// The HTTPS exchange failed; [httpStatus] is set when a non-200 status
+/// was received.
+final class DnsTransportException extends DnsException {
+  final int? httpStatus;
+  const DnsTransportException(super.message, {this.httpStatus});
+}
+
+final class DnsCancelledException extends DnsException {
+  const DnsCancelledException(super.message);
+}
+
+final class DnsTimeoutException extends DnsException {
+  const DnsTimeoutException(super.message);
 }
 
 final _label = RegExp(r'^[a-z0-9_-]+$');
@@ -33,7 +80,7 @@ int _ttl(int ttl) => ttl > 0x7fffffff ? 0 : ttl;
 
 String normalizeDnsName(String name) {
   if (name.codeUnits.any((c) => c > 127)) {
-    throw const DnsException(DnsError.invalidName, "Use ASCII DNS names");
+    throw const DnsInvalidNameException("Use ASCII DNS names");
   }
   final value = (name.endsWith('.') ? name.substring(0, name.length - 1) : name)
       .toLowerCase();
@@ -41,7 +88,7 @@ String normalizeDnsName(String name) {
       value.length > 253 ||
       !value.split('.').every((label) =>
           label.isNotEmpty && label.length <= 63 && _label.hasMatch(label))) {
-    throw const DnsException(DnsError.invalidName, 'Invalid ASCII DNS name');
+    throw const DnsInvalidNameException('Invalid ASCII DNS name');
   }
   return value;
 }
@@ -80,7 +127,7 @@ class DnsTxtRecord {
     try {
       return utf8.decode(bytes);
     } on FormatException {
-      throw const DnsException(DnsError.malformedResponse, 'TXT is not UTF-8');
+      throw const DnsMalformedResponseException('TXT is not UTF-8');
     }
   }
 }
@@ -118,8 +165,7 @@ final class DnsValidationIssuer {
             normalizeDnsName(r.name) != canonicalName ||
             r.ttl < 0 ||
             r.ttl > 0xffffffff)) {
-      throw const DnsException(
-          DnsError.malformedResponse, 'Invalid validated TXT result');
+      throw const DnsMalformedResponseException('Invalid validated TXT result');
     }
     var owner = question;
     final seen = <String>{owner};
@@ -129,19 +175,19 @@ final class DnsValidationIssuer {
           normalizeDnsName(alias.name) != owner ||
           alias.ttl < 0 ||
           alias.ttl > 0xffffffff) {
-        throw const DnsException(
-            DnsError.malformedResponse, 'Invalid validated CNAME chain');
+        throw const DnsMalformedResponseException(
+            'Invalid validated CNAME chain');
       }
       chain.add(DnsRecord(
           name: owner, type: 5, ttl: _ttl(alias.ttl), data: alias.data));
       owner = normalizeDnsName(alias.data);
       if (!seen.add(owner)) {
-        throw const DnsException(DnsError.aliasLoop, 'CNAME loop');
+        throw const DnsAliasLoopException('CNAME loop');
       }
     }
     if (owner != canonicalName) {
-      throw const DnsException(
-          DnsError.questionMismatch, 'CNAME chain does not reach TXT owner');
+      throw const DnsQuestionMismatchException(
+          'CNAME chain does not reach TXT owner');
     }
     return AuthenticatedTxtResult._(
         question,
@@ -201,7 +247,7 @@ class DnsResponse {
       Duration age = Duration.zero}) {
     if (age < Duration.zero) throw ArgumentError.value(age, 'age');
     const malformed =
-        DnsException(DnsError.malformedResponse, 'Invalid DNS JSON response');
+        DnsMalformedResponseException('Invalid DNS JSON response');
     if (json is! Map<String, dynamic> || json['Status'] is! int) {
       throw malformed;
     }
@@ -219,8 +265,7 @@ class DnsResponse {
       throw malformed;
     }
     if (rawAnswers.length > maxAnswers) {
-      throw const DnsException(
-          DnsError.responseTooLarge, 'Too many DNS answers');
+      throw const DnsResponseTooLargeException('Too many DNS answers');
     }
     String name(Object? input) {
       if (input is! String) throw malformed;
@@ -274,27 +319,25 @@ class DnsResponse {
       {int maxOwnerVisits = 8}) {
     domain = normalizeDnsName(domain);
     if (status != 0) {
-      throw DnsException(DnsError.queryFailed, 'DNS query failed',
-          responseCode: status);
+      throw DnsQueryFailedException('DNS query failed', rcode: status);
     }
     if (authenticatedData != true ||
         checkingDisabled != false ||
         truncated != false) {
-      throw const DnsException(DnsError.authenticationUnavailable,
+      throw const DnsAuthenticationUnavailableException(
           'Authenticated complete DNS response required');
     }
     if (questions.length != 1 ||
         questions.single.type != 16 ||
         questions.single.name != domain) {
-      throw const DnsException(
-          DnsError.questionMismatch, 'DNS question mismatch');
+      throw const DnsQuestionMismatchException('DNS question mismatch');
     }
     var owner = domain;
     final seen = <String>{};
     final aliases = <DnsRecord>[];
     for (var visit = 0; visit < maxOwnerVisits; visit++) {
       if (!seen.add(owner)) {
-        throw const DnsException(DnsError.aliasLoop, 'CNAME loop');
+        throw const DnsAliasLoopException('CNAME loop');
       }
       final records = answers.where((record) => record.name == owner);
       final cnames = records.where((record) => record.type == 5).toList();
@@ -312,30 +355,25 @@ class DnsResponse {
             this);
       }
       if (cnames.length != 1 || txt.isNotEmpty) {
-        throw const DnsException(
-            DnsError.aliasAmbiguous, 'Ambiguous CNAME owner');
+        throw const DnsAliasAmbiguousException('Ambiguous CNAME owner');
       }
       aliases.add(cnames.single);
       try {
         owner = normalizeDnsName(cnames.single.data);
       } on DnsException {
-        throw const DnsException(
-            DnsError.malformedResponse, 'Invalid CNAME target');
+        throw const DnsMalformedResponseException('Invalid CNAME target');
       }
     }
-    throw const DnsException(
-        DnsError.aliasTooLong, 'CNAME chain exceeds owner limit');
+    throw const DnsAliasTooLongException('CNAME chain exceeds owner limit');
   }
 }
 
 // DNS decimal escapes encode octets; decode UTF-8 only after joining TXT chunks.
 List<int> decodeDnsTxtBytes(String value, {int maxPresentationLength = 8192}) {
   if (value.length > maxPresentationLength) {
-    throw const DnsException(
-        DnsError.responseTooLarge, 'TXT presentation exceeds limit');
+    throw const DnsResponseTooLargeException('TXT presentation exceeds limit');
   }
-  const malformed =
-      DnsException(DnsError.malformedResponse, 'Malformed TXT presentation');
+  const malformed = DnsMalformedResponseException('Malformed TXT presentation');
   // utf8.encode would silently turn these into U+FFFD, altering the octets.
   for (var i = 0; i < value.length; i++) {
     final unit = value.codeUnitAt(i);

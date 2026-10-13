@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:doh_resolver/doh_resolver.dart';
 import 'package:test/test.dart';
 
-import 'dns_test.dart' show error;
 import 'support/dns_wire.dart';
 
 const pointer = [0xc0, 12];
@@ -88,7 +87,7 @@ void main() {
     validateDnsWireResponse(query, wireReply(name: 'ALICE.example'));
     expect(
         () => validateDnsWireResponse(query, wireReply(name: 'alicf.example')),
-        throwsA(error(DnsError.questionMismatch)));
+        throwsA(isA<DnsQuestionMismatchException>()));
   });
 
   test('rejects replies that do not answer the query', () {
@@ -101,7 +100,7 @@ void main() {
       wireReply()..[query.length - 11 - 1] = 3,
     ]) {
       expect(() => validateDnsWireResponse(query, reply),
-          throwsA(error(DnsError.questionMismatch)));
+          throwsA(isA<DnsQuestionMismatchException>()));
     }
   });
 
@@ -112,10 +111,10 @@ void main() {
       wireReply()..[query.length - 5] = 1,
     ]) {
       expect(() => validateDnsWireResponse(query, reply),
-          throwsA(error(DnsError.malformedResponse)));
+          throwsA(isA<DnsMalformedResponseException>()));
     }
     expect(() => validateDnsWireResponse(wireReply(), wireReply()),
-        throwsArgumentError);
+        throwsA(isA<DnsInvalidQueryException>()));
   });
 
   group('hostile messages fail closed', () {
@@ -250,7 +249,8 @@ void main() {
         wireReply(),
         [...query]..[0] = 256,
       ]) {
-        expect(() => padDnsWireQuery(bad), throwsArgumentError);
+        expect(() => padDnsWireQuery(bad),
+            throwsA(isA<DnsInvalidQueryException>()));
       }
     });
   });

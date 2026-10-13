@@ -66,8 +66,14 @@ class IoDohTransport implements DohTransport, DohWireTransport {
   @override
   DnsOperation<DohHttpResponse> startWire(Uri uri, List<int> query,
       {required int maxResponseBytes}) {
-    return _start(uri, min(maxResponseBytes, 65535),
-        padQueries ? padDnsWireQuery(query) : checkedDnsWireQuery(query));
+    final List<int> checked;
+    try {
+      checked =
+          padQueries ? padDnsWireQuery(query) : checkedDnsWireQuery(query);
+    } on DnsException catch (error) {
+      return DnsOperation.failed(error);
+    }
+    return _start(uri, min(maxResponseBytes, 65535), checked);
   }
 
   Future<void> close() async {
@@ -87,20 +93,17 @@ class IoDohTransport implements DohTransport, DohWireTransport {
         uri.userInfo.isNotEmpty ||
         uri.hasFragment ||
         maxResponseBytes < 1) {
-      throw ArgumentError('Expected a bounded HTTPS request');
+      return DnsOperation.failed(
+          const DnsInvalidQueryException('Expected a bounded HTTPS request'));
     }
     if (_closed) {
-      return DnsOperation(
-          Future.error(
-              const DnsException(DnsError.cancelled, 'DNS transport closed')),
-          () {});
+      return DnsOperation.failed(
+          const DnsCancelledException('DNS transport closed'));
     }
     if (_active >= maxConcurrentRequests &&
         _waiting.length >= maxQueuedRequests) {
-      return DnsOperation(
-          Future.error(const DnsException(
-              DnsError.transport, 'DNS transport request queue is full')),
-          () {});
+      return DnsOperation.failed(
+          const DnsTransportException('DNS transport request queue is full'));
     }
     final request = _IoRequest(this, uri, maxResponseBytes, query);
     if (_active < maxConcurrentRequests) {
@@ -145,9 +148,7 @@ class IoDohTransport implements DohTransport, DohWireTransport {
         ZoneSpecification(handleUncaughtError: (_, __, ___, error, stack) {
       if (lane.owner case final owner?) {
         owner._finish(
-            const DnsException(
-                DnsError.transport, 'Resolver connection failed'),
-            stack);
+            const DnsTransportException('Resolver connection failed'), stack);
       } else {
         _retire(lane);
       }
@@ -168,8 +169,8 @@ class IoDohTransport implements DohTransport, DohWireTransport {
               owner._done ||
               _origin(destination) != lane.origin ||
               _origin(owner.uri) != lane.origin) {
-            throw const DnsException(
-                DnsError.cancelled, 'DNS connection cancelled or redirected');
+            throw const DnsCancelledException(
+                'DNS connection cancelled or redirected');
           }
           final task = SocksConnection.start(
               proxyHost: proxy.host,
@@ -271,10 +272,8 @@ class _IoRequest {
   late final Timer _deadline;
   bool _done = false;
   _IoRequest(this.transport, this.uri, this.limit, this.query) {
-    _deadline = Timer(
-        transport.requestTimeout,
-        () => _finish(
-            const DnsException(DnsError.timedOut, 'DNS request timed out')));
+    _deadline = Timer(transport.requestTimeout,
+        () => _finish(const DnsTimeoutException('DNS request timed out')));
   }
 
   void _finish(Object outcome, [StackTrace? stack]) {
@@ -290,7 +289,7 @@ class _IoRequest {
   }
 
   void cancel() =>
-      _finish(const DnsException(DnsError.cancelled, 'DNS request cancelled'));
+      _finish(const DnsCancelledException('DNS request cancelled'));
 
   Future<void> run() async {
     if (_done) return;
@@ -312,30 +311,27 @@ class _IoRequest {
       }
       final response = await request.close();
       if (response.statusCode != 200) {
-        throw DnsException(DnsError.transport, 'Resolver HTTP request failed',
-            responseCode: response.statusCode);
+        throw DnsTransportException('Resolver HTTP request failed',
+            httpStatus: response.statusCode);
       }
       final mime = response.headers.contentType?.mimeType;
       if (query == null
           ? mime != 'application/json' && mime != 'application/dns-json'
           : mime != 'application/dns-message') {
-        throw const DnsException(
-            DnsError.malformedResponse, 'Unexpected DNS response media type');
+        throw const DnsMalformedResponseException(
+            'Unexpected DNS response media type');
       }
       if (response.headers.value(HttpHeaders.contentEncodingHeader)
           case final encoding? when encoding.toLowerCase() != 'identity') {
-        throw const DnsException(
-            DnsError.malformedResponse, 'Encoded DNS response');
+        throw const DnsMalformedResponseException('Encoded DNS response');
       }
       if (response.contentLength > limit) {
-        throw const DnsException(
-            DnsError.responseTooLarge, 'DNS body exceeds limit');
+        throw const DnsResponseTooLargeException('DNS body exceeds limit');
       }
       final bytes = BytesBuilder(copy: false);
       await for (final chunk in response) {
         if (bytes.length + chunk.length > limit) {
-          throw const DnsException(
-              DnsError.responseTooLarge, 'DNS body exceeds limit');
+          throw const DnsResponseTooLargeException('DNS body exceeds limit');
         }
         bytes.add(chunk);
         if (_done) return;
@@ -348,8 +344,7 @@ class _IoRequest {
       _finish(
           error is DnsException
               ? error
-              : const DnsException(
-                  DnsError.transport, 'Resolver connection failed'),
+              : const DnsTransportException('Resolver connection failed'),
           stack);
     }
   }

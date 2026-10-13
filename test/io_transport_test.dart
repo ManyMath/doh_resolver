@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:doh_resolver/doh_resolver_io.dart';
 import 'package:test/test.dart';
-import 'dns_test.dart' show reply, error;
+import 'dns_test.dart' show reply;
 import 'support/test_pki.dart';
 import 'support/tunnel_proxy.dart';
 
@@ -74,7 +74,7 @@ void main() {
             securityContext: trust,
             proxy: SocksProxy(InternetAddress.loopbackIPv4, proxy.port)));
     await expectLater(resolver.lookupTxt('alice.example'),
-        throwsA(error(DnsError.transport)));
+        throwsA(isA<DnsTransportException>()));
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(requests, 0);
     expect(proxy.connections, 1);
@@ -84,7 +84,7 @@ void main() {
     await expectLater(
         DohResolver(endpoint: endpoint(), transport: IoDohTransport())
             .lookupTxt('alice.example'),
-        throwsA(error(DnsError.transport)));
+        throwsA(isA<DnsTransportException>()));
   });
   test('redirects never produce a second request', () async {
     var requests = 0;
@@ -100,7 +100,7 @@ void main() {
                 endpoint: endpoint(),
                 transport: IoDohTransport(securityContext: trust))
             .lookupTxt('alice.example'),
-        throwsA(error(DnsError.transport)));
+        throwsA(isA<DnsTransportException>()));
     expect(requests, 1);
   });
   test('streaming response size limit aborts before parsing', () async {
@@ -115,7 +115,7 @@ void main() {
                 maxResponseBytes: 128,
                 transport: IoDohTransport(securityContext: trust))
             .lookupTxt('alice.example'),
-        throwsA(error(DnsError.responseTooLarge)));
+        throwsA(isA<DnsResponseTooLargeException>()));
   });
   test('unsigned response is not accepted merely because HTTPS succeeded',
       () async {
@@ -129,7 +129,7 @@ void main() {
                 endpoint: endpoint(),
                 transport: IoDohTransport(securityContext: trust))
             .lookupTxt('alice.example'),
-        throwsA(error(DnsError.authenticationUnavailable)));
+        throwsA(isA<DnsAuthenticationUnavailableException>()));
   });
   for (final cancel in [false, true]) {
     test('${cancel ? 'cancel' : 'timeout'} destroys stalled response transport',
@@ -151,8 +151,11 @@ void main() {
               securityContext: trust,
               proxy: SocksProxy(InternetAddress.loopbackIPv4, proxy.port)));
       final operation = resolver.startTxtLookup('alice.example');
-      final failed = expectLater(operation.result,
-          throwsA(error(cancel ? DnsError.cancelled : DnsError.timedOut)));
+      final failed = expectLater(
+          operation.result,
+          throwsA(cancel
+              ? isA<DnsCancelledException>()
+              : isA<DnsTimeoutException>()));
       await sent.future;
       if (cancel) operation.cancel();
       await failed;
@@ -255,7 +258,7 @@ void main() {
                   endpoint: endpoint(),
                   transport: IoDohTransport(securityContext: trust))
               .lookupTxt('alice.example'),
-          throwsA(error(DnsError.malformedResponse)));
+          throwsA(isA<DnsMalformedResponseException>()));
     });
   }
 }

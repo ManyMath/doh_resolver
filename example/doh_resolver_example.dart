@@ -15,7 +15,7 @@ Future<void> main(List<String> arguments) async {
         print('${record.name} TTL=${record.ttl}: ${record.text}');
       }
     } on DnsException catch (error) {
-      print('Lookup rejected: ${error.code.name}');
+      print('Lookup rejected: $error');
     }
   } finally {
     await transport.close();
