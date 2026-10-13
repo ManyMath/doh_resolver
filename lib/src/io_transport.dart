@@ -31,6 +31,9 @@ class IoDohTransport implements DohTransport, DohWireTransport {
   final _waiting = Queue<_IoRequest>();
   final _running = <_IoRequest>{};
   final _idle = <_Lane>[];
+  // Lanes fork from here: forking from Zone.current during a queued handoff
+  // would parent each new lane on its predecessor and keep the chain alive.
+  final _zone = Zone.current;
   IoDohTransport(
       {this.proxy,
       this.proxyDestination,
@@ -138,7 +141,7 @@ class IoDohTransport implements DohTransport, DohWireTransport {
 
   _Lane _newLane(_Origin origin) {
     final lane = _Lane(origin);
-    lane.zone = Zone.current.fork(specification:
+    lane.zone = _zone.fork(specification:
         ZoneSpecification(handleUncaughtError: (_, __, ___, error, stack) {
       if (lane.owner case final owner?) {
         owner._finish(

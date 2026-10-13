@@ -327,6 +327,21 @@ void main() {
     expect(other.connections, 1);
   });
 
+  test('queued handoffs do not chain lane zones', () async {
+    await serve(answer);
+    final overrides = _ZoneRecordingOverrides();
+    final lanes = await HttpOverrides.runWithHttpOverrides(() async {
+      final t =
+          transport(null, reuseConnections: false, maxConcurrentRequests: 1);
+      await Future.wait([for (var id = 1; id <= 4; id++) expectAnswer(t, id)]);
+      return overrides.zones;
+    }, overrides);
+    expect(lanes, hasLength(4));
+    expect(lanes.map((zone) => zone.parent).toSet(), hasLength(1),
+        reason: 'each lane must fork from the transport zone, not its '
+            'predecessor, or retired lanes stay reachable');
+  });
+
   test('idle connections are released without close', () async {
     await serve(answer);
     final t = transport(null, idleTimeout: const Duration(milliseconds: 200));
@@ -379,4 +394,13 @@ void main() {
     await t.close();
     await until(() => server.closed == 1);
   });
+}
+
+class _ZoneRecordingOverrides extends HttpOverrides {
+  final zones = <Zone>[];
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    zones.add(Zone.current);
+    return super.createHttpClient(context);
+  }
 }
