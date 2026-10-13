@@ -54,7 +54,8 @@ void main() {
     expect(result.aliases, hasLength(1));
     expect(result.response, same(response));
     expect(result.records.first.ttl, 60);
-    expect(result.authentication, DnsAuthentication.resolverAsserted);
+    // ignore: deprecated_member_use_from_same_package
+    expect(result, isA<AuthenticatedTxtResult>());
   });
   for (final field in ['AD', 'CD', 'TC']) {
     test('missing or unacceptable $field never authenticates', () {
@@ -199,34 +200,6 @@ void main() {
     expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
         throwsA(isA<DnsMalformedResponseException>()));
   });
-  test('validated evidence enforces DNS TTL bounds', () {
-    final issuer = DnsValidationIssuer('test');
-    for (final ttl in [-1, 0x100000000]) {
-      expect(
-          () => issuer.issueTxt(
-                  question: 'alice.example',
-                  canonicalName: 'alice.example',
-                  resolver: Uri.https('resolver.example', '/dns-query'),
-                  records: [
-                    DnsTxtRecord(name: 'alice.example', ttl: ttl, bytes: [1])
-                  ]),
-          throwsA(isA<DnsMalformedResponseException>()));
-    }
-    expect(
-        issuer
-            .issueTxt(
-                question: 'alice.example',
-                canonicalName: 'alice.example',
-                resolver: Uri.https('resolver.example', '/dns-query'),
-                records: [
-                  DnsTxtRecord(
-                      name: 'alice.example', ttl: 0xffffffff, bytes: [1])
-                ])
-            .records
-            .single
-            .ttl,
-        0);
-  });
   test('TTLs with the high bit set are treated as zero', () {
     for (final (raw, ttl) in [(0x7fffffff, 0x7fffffff), (0x80000000, 0)]) {
       final result = decode(reply(answers: [
@@ -235,19 +208,6 @@ void main() {
       ])).authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw);
       expect(result.records.single.ttl, ttl);
       expect(result.aliases.single.ttl, ttl);
-      final issued = DnsValidationIssuer('test').issueTxt(
-          question: 'alice.example',
-          canonicalName: 'pay.example',
-          resolver: Uri.https('resolver.example', '/dns-query'),
-          records: [
-            DnsTxtRecord(name: 'pay.example', ttl: raw, bytes: [1])
-          ],
-          aliases: [
-            DnsRecord(
-                name: 'alice.example', type: 5, ttl: raw, data: 'pay.example')
-          ]);
-      expect(issued.records.single.ttl, ttl);
-      expect(issued.aliases.single.ttl, ttl);
     }
   });
   test('raw TXT is taken verbatim and quoted TXT must be quoted', () {

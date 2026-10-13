@@ -160,120 +160,26 @@ class DnsTxtRecord {
   }
 }
 
-/// Where an [AuthenticatedTxtResult]'s authenticity claim comes from.
+/// TXT records from an AD-flagged resolver response. An empty [records] list is
+/// a NODATA answer the resolver asserts is authenticated.
 ///
-/// [resolverAsserted] means the HTTPS resolver set the AD flag; trust rests on
-/// that resolver. [locallyValidated] means some [DnsValidationIssuer] in this
-/// process vouched for it, so also check [AuthenticatedTxtResult.validator].
-enum DnsAuthentication { resolverAsserted, locallyValidated }
-
-/// The identity of a [DnsValidationIssuer]. Compare it with [identical];
-/// [name] is only a label and is not unique.
-final class DnsValidator {
-  final String name;
-  DnsValidator._(this.name);
-
-  @override
-  String toString() => 'DnsValidator($name)';
-}
-
-/// Mints [DnsAuthentication.locallyValidated] results for a local DNSSEC
-/// validator.
-///
-/// Anyone can construct an issuer, so `locallyValidated` alone proves nothing.
-/// Keep your issuer private and accept a result only when
-/// `identical(result.validator, myIssuer.validator)`.
-final class DnsValidationIssuer {
-  final DnsValidator validator;
-  DnsValidationIssuer(String name) : validator = DnsValidator._(name) {
-    if (name.isEmpty) throw ArgumentError.value(name, 'name');
-  }
-
-  /// Issues evidence for [records] at [canonicalName], reached from
-  /// [question] through [aliases]. Call only after verifying the signatures;
-  /// this checks owner binding and bounds, not cryptography.
-  AuthenticatedTxtResult issueTxt({
-    required String question,
-    required String canonicalName,
-    required Uri resolver,
-    required List<DnsTxtRecord> records,
-    List<DnsRecord> aliases = const [],
-  }) {
-    question = normalizeDnsName(question);
-    canonicalName = normalizeDnsName(canonicalName);
-    if (records.isEmpty ||
-        records.length > 64 ||
-        aliases.length > 7 ||
-        records.any((r) =>
-            normalizeDnsName(r.name) != canonicalName ||
-            r.ttl < 0 ||
-            r.ttl > 0xffffffff)) {
-      throw const DnsMalformedResponseException('Invalid validated TXT result');
-    }
-    var owner = question;
-    final seen = <String>{owner};
-    final chain = <DnsRecord>[];
-    for (final alias in aliases) {
-      if (alias.type != 5 ||
-          normalizeDnsName(alias.name) != owner ||
-          alias.ttl < 0 ||
-          alias.ttl > 0xffffffff) {
-        throw const DnsMalformedResponseException(
-            'Invalid validated CNAME chain');
-      }
-      chain.add(DnsRecord(
-          name: owner,
-          type: 5,
-          ttl: effectiveDnsTtl(alias.ttl),
-          data: alias.data));
-      owner = normalizeDnsName(alias.data);
-      if (!seen.add(owner)) {
-        throw const DnsAliasLoopException('CNAME loop');
-      }
-    }
-    if (owner != canonicalName) {
-      throw const DnsQuestionMismatchException(
-          'CNAME chain does not reach TXT owner');
-    }
-    return AuthenticatedTxtResult._(
-        question,
-        canonicalName,
-        resolver,
-        [
-          for (final r in records)
-            DnsTxtRecord(
-                name: canonicalName,
-                ttl: effectiveDnsTtl(r.ttl),
-                bytes: r.bytes)
-        ],
-        chain,
-        null,
-        DnsAuthentication.locallyValidated,
-        validator);
-  }
-}
-
-/// TXT records whose authenticity is attested by [authentication].
-///
-/// Only this package can create one: from an AD-flagged resolver response, or
-/// through a [DnsValidationIssuer]. An empty [records] list is an
-/// authenticated NODATA answer.
-final class AuthenticatedTxtResult {
+/// Records only the resolver's AD assertion; it is not validation evidence.
+final class ResolverAssertedTxtResult {
   final String question;
   final String canonicalName;
   final Uri resolver;
   final List<DnsTxtRecord> records;
   final List<DnsRecord> aliases;
   final DnsResponse? response;
-  final DnsAuthentication authentication;
-  final DnsValidator? validator;
-  AuthenticatedTxtResult._(this.question, this.canonicalName, this.resolver,
-      List<DnsTxtRecord> records, List<DnsRecord> aliases, this.response,
-      [this.authentication = DnsAuthentication.resolverAsserted,
-      this.validator])
+  ResolverAssertedTxtResult._(this.question, this.canonicalName, this.resolver,
+      List<DnsTxtRecord> records, List<DnsRecord> aliases, this.response)
       : records = List.unmodifiable(records),
         aliases = List.unmodifiable(aliases);
 }
+
+/// Use [ResolverAssertedTxtResult]: the result asserts nothing itself.
+@Deprecated('Use ResolverAssertedTxtResult')
+typedef AuthenticatedTxtResult = ResolverAssertedTxtResult;
 
 /// A bounded, validated JSON DNS response from [resolver].
 class DnsResponse {
@@ -376,7 +282,7 @@ class DnsResponse {
   /// The TXT records answering [domain], following at most [maxOwnerVisits]
   /// owners through CNAMEs. Requires a successful, AD-flagged, untruncated
   /// response with checking enabled and a single matching TXT question.
-  AuthenticatedTxtResult authenticatedTxt(String domain,
+  ResolverAssertedTxtResult authenticatedTxt(String domain,
       {required DnsTxtFormat txtFormat, int maxOwnerVisits = 8}) {
     domain = normalizeDnsName(domain);
     if (status != 0) {
@@ -404,7 +310,7 @@ class DnsResponse {
       final cnames = records.where((record) => record.type == 5).toList();
       final txt = records.where((record) => record.type == 16).toList();
       if (cnames.isEmpty) {
-        return AuthenticatedTxtResult._(
+        return ResolverAssertedTxtResult._(
             domain,
             owner,
             resolver,

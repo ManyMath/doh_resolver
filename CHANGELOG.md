@@ -5,8 +5,6 @@
   untruncated, checking-enabled answers to the exact question, following CNAME
   chains strictly. JSON TXT data is decoded per provider through `DnsTxtFormat`,
   defaulting for Google and Cloudflare hosts.
-- Local-validation evidence issued by `DnsValidationIssuer.issueTxt`, carrying
-  the issuing `DnsValidator` for identity checks.
 - Wire-format helpers: `validateDnsWireResponse` for strict framing and
   query/response binding, `padDnsWireQuery` for RFC 8467 padding, and
   `adjustDnsWireTtls` for cache-ready TTLs.

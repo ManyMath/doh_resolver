@@ -58,8 +58,7 @@ abstract interface class DohWireTransport {
 /// Looks up TXT records through a DoH JSON API and accepts only answers the
 /// resolver asserts are DNSSEC-authenticated.
 ///
-/// This trusts the resolver's AD flag: use a local validator with
-/// [DnsValidationIssuer] when the resolver must not choose the answer.
+/// This trusts the resolver's AD flag.
 class DohResolver {
   final DohTransport transport;
   final Uri endpoint;
@@ -108,7 +107,7 @@ class DohResolver {
   }
 
   /// Looks up [domain]'s TXT records; see [startTxtLookup].
-  Future<AuthenticatedTxtResult> lookupTxt(String domain) =>
+  Future<ResolverAssertedTxtResult> lookupTxt(String domain) =>
       startTxtLookup(domain).result;
 
   /// Starts a cancellable TXT lookup for [domain].
@@ -118,7 +117,7 @@ class DohResolver {
   /// such as Google), and pads the URL to a multiple of 128 characters so the
   /// name length is hidden. Never throws: every failure is a [DnsException] in
   /// the result.
-  DnsOperation<AuthenticatedTxtResult> startTxtLookup(String domain) {
+  DnsOperation<ResolverAssertedTxtResult> startTxtLookup(String domain) {
     try {
       domain = normalizeDnsName(domain);
     } on DnsException catch (error) {
@@ -148,7 +147,7 @@ class DohResolver {
       return DnsOperation.failed(
           const DnsTransportException('DNS transport failed'));
     }
-    final result = Completer<AuthenticatedTxtResult>();
+    final result = Completer<ResolverAssertedTxtResult>();
     late Timer timer;
     // Only an unfinished transport operation is cancelled; once its result
     // has completed, the transport owns no further work for this lookup.

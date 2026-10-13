@@ -27,19 +27,7 @@ try {
 `DohResolver` accepts an answer only when the resolver asserts it is
 DNSSEC-authenticated: the AD flag is set, checking is enabled, the reply is not
 truncated, and its single TXT question matches the requested name. The result's
-`DnsAuthentication.resolverAsserted` evidence means you trust that resolver; it
-is not local DNSSEC validation. Use a local validator, such as
-`dnssec_resolver`, when the resolver itself must not choose the answer.
-
-A local validator reports its results through a `DnsValidationIssuer`. Anyone
-can construct an issuer, so `DnsAuthentication.locallyValidated` and the
-validator's name prove nothing on their own. Keep your issuer private and check
-its identity:
-
-```dart
-bool trusted(AuthenticatedTxtResult result) =>
-    identical(result.validator, myIssuer.validator);
-```
+presence means you trust that resolver; it is not local DNSSEC validation.
 
 `validateDnsWireResponse` checks message framing and that a response answers
 its query; it does not validate DNSSEC signatures or make answer data trusted.

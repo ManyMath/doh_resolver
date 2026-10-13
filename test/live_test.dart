@@ -43,7 +43,6 @@ void main() {
       final result =
           await DohResolver(transport: IoDohTransport(), endpoint: endpoint)
               .lookupTxt('getmonero.org');
-      expect(result.authentication, DnsAuthentication.resolverAsserted);
       expect(result.records, isNotEmpty);
     }, skip: skip);
   }
