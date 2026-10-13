@@ -294,6 +294,19 @@ void main() {
     expect(transport.cancelled, isFalse,
         reason: 'a completed transport operation is never cancelled');
   });
+  test('repeated endpoint parameters survive; resolver keys override', () {
+    final transport = FakeTransport();
+    DohResolver(
+            transport: transport,
+            endpoint: Uri.parse('https://dns.example/resolve'
+                '?tag=first&tag=second&name=evil&type=A&type=AAAA'))
+        .startTxtLookup('alice.example');
+    final sent = transport.uri!.queryParametersAll;
+    expect(sent['tag'], ['first', 'second']);
+    expect(sent['name'], ['alice.example.']);
+    expect(sent['type'], ['TXT']);
+    expect(transport.uri.toString().length % 128, 0);
+  });
   test('padding hides name length and keeps endpoint parameters', () {
     final lengths = <int>{};
     for (final name in ['a.example', 'abcd.example']) {
@@ -317,6 +330,17 @@ void main() {
         operation.result, throwsA(isA<DnsInvalidNameException>()));
     operation.cancel();
     expect(transport.uri, isNull);
+  });
+  test('endpoints with undecodable query parameters are rejected up front', () {
+    for (final endpoint in [
+      'https://resolver.example/resolve?x=%FF',
+      'https://resolver.example/resolve?%C3=1',
+    ]) {
+      expect(
+          () => DohResolver(
+              transport: FakeTransport(), endpoint: Uri.parse(endpoint)),
+          throwsArgumentError);
+    }
   });
   test('a transport that throws on start fails the result', () async {
     for (final (thrown, expected) in [

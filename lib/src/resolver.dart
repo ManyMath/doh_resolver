@@ -41,6 +41,8 @@ class DohResolver {
   final Uri endpoint;
   final Duration timeout;
   final int maxResponseBytes;
+  // Decoded once so a malformed endpoint fails construction, not each lookup.
+  late final Map<String, List<String>> _endpointParameters;
   DohResolver(
       {required this.transport,
       Uri? endpoint,
@@ -57,6 +59,12 @@ class DohResolver {
     if (timeout <= Duration.zero || maxResponseBytes < 1) {
       throw ArgumentError('Invalid query limits');
     }
+    try {
+      _endpointParameters = this.endpoint.queryParametersAll;
+    } on FormatException catch (error) {
+      throw ArgumentError.value(
+          this.endpoint, 'endpoint', 'Undecodable query: ${error.message}');
+    }
   }
 
   Future<AuthenticatedTxtResult> lookupTxt(String domain) =>
@@ -68,8 +76,9 @@ class DohResolver {
     } on DnsException catch (error) {
       return DnsOperation.failed(error);
     }
-    final parameters = {
-      ...endpoint.queryParameters,
+    // Repeated endpoint parameters survive; the resolver's own keys override.
+    final parameters = <String, Object>{
+      ..._endpointParameters,
       'name': '$domain.',
       'type': 'TXT',
       'do': 'true',
