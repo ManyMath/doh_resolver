@@ -5,18 +5,29 @@ import 'dns.dart';
 /// A started request. Starting never throws: every failure, including
 /// invalid input, completes [result] with a [DnsException].
 class DnsOperation<T> {
+  /// Completes with the outcome. Like any [Future], an error nobody listens
+  /// to is reported as uncaught; cancelling does not consume it, so attach a
+  /// handler or call [FutureExtensions.ignore] on results you discard.
   final Future<T> result;
+
+  /// Fails [result] with [DnsCancelledException] unless it has already
+  /// completed, and releases the work. Safe to call repeatedly.
   final void Function() cancel;
   const DnsOperation(this.result, this.cancel);
+
+  /// An operation that has already failed with [error].
   DnsOperation.failed(DnsException error) : this(Future.error(error), _noop);
 }
 
 void _noop() {}
 
+/// A complete HTTPS response from a DoH resolver.
 class DohHttpResponse {
   final int statusCode;
   final List<int> body;
-  // Time the response spent in HTTP caches; DNS TTLs must be reduced by it.
+
+  /// Time the response spent in HTTP caches, from its `Age` header. DNS TTLs
+  /// must be reduced by it; see [effectiveDnsTtl] and [adjustDnsWireTtls].
   final Duration age;
   DohHttpResponse(this.statusCode, List<int> body, {this.age = Duration.zero})
       : body = List.unmodifiable(body) {
@@ -24,10 +35,17 @@ class DohHttpResponse {
   }
 }
 
+/// Sends DoH JSON GET requests.
+///
+/// Implementations must deliver every failure through the returned
+/// [DnsOperation.result], bound the body to `maxResponseBytes`, and make
+/// `cancel` idempotent. [DohResolver] cancels only operations that have not
+/// completed.
 abstract interface class DohTransport {
   DnsOperation<DohHttpResponse> start(Uri uri, {required int maxResponseBytes});
 }
 
+/// Sends RFC 8484 wire-format queries; see [DohTransport] for the contract.
 abstract interface class DohWireTransport {
   /// Sends wire [query]. With [preserveMessage], the query is sent and the
   /// response returned exactly as exchanged, with no padding or ID rewrite,
@@ -36,14 +54,32 @@ abstract interface class DohWireTransport {
       {required int maxResponseBytes, bool preserveMessage = false});
 }
 
+/// Looks up TXT records through a DoH JSON API and accepts only answers the
+/// resolver asserts are DNSSEC-authenticated.
+///
+/// This trusts the resolver's AD flag: use a local validator with
+/// [DnsValidationIssuer] when the resolver must not choose the answer.
 class DohResolver {
   final DohTransport transport;
   final Uri endpoint;
+
+  /// The deadline for a whole lookup. The transport may enforce its own,
+  /// too; whichever is earlier applies.
   final Duration timeout;
   final int maxResponseBytes;
+
+  /// How [endpoint] writes TXT data. Known Google and Cloudflare hosts get
+  /// their format by default; any other endpoint must pass it explicitly.
   final DnsTxtFormat txtFormat;
   // Decoded once so a malformed endpoint fails construction, not each lookup.
   late final Map<String, List<String>> _endpointParameters;
+
+  /// Creates a resolver for [endpoint], Google's JSON API by default.
+  ///
+  /// Throws [ArgumentError] for a non-HTTPS, credential-bearing,
+  /// fragment-bearing or undecodable endpoint, invalid limits, or an unknown
+  /// provider without [txtFormat]. Endpoint query parameters are kept,
+  /// including repeated ones, except those the resolver sets itself.
   DohResolver(
       {required this.transport,
       Uri? endpoint,
@@ -73,9 +109,17 @@ class DohResolver {
     }
   }
 
+  /// Looks up [domain]'s TXT records; see [startTxtLookup].
   Future<AuthenticatedTxtResult> lookupTxt(String domain) =>
       startTxtLookup(domain).result;
 
+  /// Starts a cancellable TXT lookup for [domain].
+  ///
+  /// The request asks for DNSSEC data with checking enabled, sends
+  /// `edns_client_subnet=0.0.0.0/0` (honoured by providers that implement it,
+  /// such as Google), and pads the URL to a multiple of 128 characters so the
+  /// name length is hidden. Never throws: every failure is a [DnsException] in
+  /// the result.
   DnsOperation<AuthenticatedTxtResult> startTxtLookup(String domain) {
     try {
       domain = normalizeDnsName(domain);

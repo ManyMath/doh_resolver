@@ -8,6 +8,8 @@ import 'dns.dart';
 import 'resolver.dart';
 import 'wire.dart';
 
+/// A SOCKS5 proxy, addressed numerically so no local DNS lookup is needed.
+/// Use [SocksCredentials.isolation] for Tor stream isolation.
 class SocksProxy {
   final InternetAddress host;
   final int port;
@@ -15,18 +17,39 @@ class SocksProxy {
   const SocksProxy(this.host, this.port, {this.credentials});
 }
 
+/// A `dart:io` HTTPS/1.1 DoH transport, direct or through SOCKS5.
+///
+/// It verifies the endpoint certificate, never follows redirects, never falls
+/// back from a configured proxy to a direct connection, bounds bodies and
+/// deadlines, and admits at most [maxConcurrentRequests] running plus
+/// [maxQueuedRequests] waiting operations. Call [close] when done.
 class IoDohTransport implements DohTransport, DohWireTransport {
   final SocksProxy? proxy;
+
+  /// Sends every proxied request to this address instead of letting the proxy
+  /// resolve the endpoint host. It applies to all endpoints used with this
+  /// transport; TLS still verifies the requested host name.
   final InternetAddress? proxyDestination;
   final SecurityContext? securityContext;
   final Duration connectionTimeout;
+
+  /// The deadline for each operation, including time spent queued.
   final Duration requestTimeout;
   final Duration idleTimeout;
   final int maxConcurrentRequests;
   final int maxQueuedRequests;
+
+  /// Whether wire queries are padded with [padDnsWireQuery].
   final bool padQueries;
-  // Defaults to off with a proxy: a shared connection lets the resolver link
-  // lookups that would otherwise travel over separate (e.g. Tor) streams.
+
+  /// Whether wire queries to the same origin share connections. Defaults to
+  /// off with a [proxy]: a shared connection lets the resolver link lookups
+  /// that would otherwise travel over separate (for example Tor) streams.
+  /// The transport rewrites each wire ID to keep it unique on a connection
+  /// and restores the caller's ID in the response, except for SIG(0)- or
+  /// TSIG-signed queries and `preserveMessage` exchanges, whose IDs are kept
+  /// and still never repeat on a connection. JSON requests never share
+  /// connections.
   final bool reuseConnections;
   int _active = 0;
   bool _closed = false;
@@ -84,6 +107,9 @@ class IoDohTransport implements DohTransport, DohWireTransport {
     return _start(uri, min(maxResponseBytes, 65535), checked, preserved);
   }
 
+  /// Fails queued and running operations with [DnsCancelledException], fails
+  /// later starts the same way, and begins closing every connection. Socket
+  /// teardown finishes asynchronously after this returns.
   Future<void> close() async {
     _closed = true;
     for (final request in [..._waiting, ..._running]) {

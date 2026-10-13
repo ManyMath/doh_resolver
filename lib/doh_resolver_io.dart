@@ -1,3 +1,5 @@
+/// Everything in `doh_resolver`, plus [IoDohTransport] for direct and SOCKS5
+/// HTTPS on `dart:io` platforms.
 library;
 
 export 'package:socks_socket/socks_connection.dart' show SocksCredentials;

@@ -7,6 +7,9 @@ const _mismatch =
     DnsQuestionMismatchException('DNS wire response does not match query');
 
 /// This is framing only: it never makes the answer trustworthy.
+/// Checks that wire [response] is a complete, well-formed answer to [query]:
+/// same ID, opcode and questions, not truncated, and EDNS version 0.
+/// Throws [DnsInvalidQueryException] for an unusable [query].
 void validateDnsWireResponse(List<int> query, List<int> response) {
   final sent = _parseOrNull(query);
   if (sent == null || sent.isResponse) {
@@ -51,6 +54,10 @@ List<int> adjustDnsWireTtls(List<int> response, {required Duration age}) {
   return List<int>.unmodifiable(adjusted);
 }
 
+/// Pads [query] to a multiple of [blockSize] octets with an RFC 7830
+/// padding option, as RFC 8467 recommends. Queries without a final OPT
+/// record, already padded, or signed (signatures must stay last) are
+/// returned unchanged.
 List<int> padDnsWireQuery(List<int> query, {int blockSize = 128}) {
   if (blockSize < 1 || blockSize > 512) {
     throw ArgumentError.value(blockSize, 'blockSize');

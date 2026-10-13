@@ -10,6 +10,8 @@ sealed class DnsException implements Exception {
   String toString() => '$runtimeType: $message';
 }
 
+/// A name that is not an ASCII DNS name of at most 253 octets with
+/// labels of letters, digits, `_` or `-`.
 final class DnsInvalidNameException extends DnsException {
   const DnsInvalidNameException(super.message);
 }
@@ -19,10 +21,13 @@ final class DnsInvalidQueryException extends DnsException {
   const DnsInvalidQueryException(super.message);
 }
 
+/// A response, or caller-supplied evidence, that does not parse or is
+/// internally inconsistent.
 final class DnsMalformedResponseException extends DnsException {
   const DnsMalformedResponseException(super.message);
 }
 
+/// A response that exceeded a configured size or count bound.
 final class DnsResponseTooLargeException extends DnsException {
   const DnsResponseTooLargeException(super.message);
 }
@@ -33,10 +38,13 @@ final class DnsQueryFailedException extends DnsException {
   const DnsQueryFailedException(super.message, {required this.rcode});
 }
 
+/// A response that was not marked authenticated, had checking disabled, or
+/// was truncated, so it carries no resolver DNSSEC assertion.
 final class DnsAuthenticationUnavailableException extends DnsException {
   const DnsAuthenticationUnavailableException(super.message);
 }
 
+/// A response, or CNAME chain, that does not answer the question asked.
 final class DnsQuestionMismatchException extends DnsException {
   const DnsQuestionMismatchException(super.message);
 }
@@ -46,14 +54,17 @@ sealed class DnsAliasException extends DnsException {
   const DnsAliasException(super.message);
 }
 
+/// A CNAME chain that revisits an owner.
 final class DnsAliasLoopException extends DnsAliasException {
   const DnsAliasLoopException(super.message);
 }
 
+/// An owner with several CNAMEs, or with both a CNAME and TXT records.
 final class DnsAliasAmbiguousException extends DnsAliasException {
   const DnsAliasAmbiguousException(super.message);
 }
 
+/// A CNAME chain longer than the configured owner limit.
 final class DnsAliasTooLongException extends DnsAliasException {
   const DnsAliasTooLongException(super.message);
 }
@@ -65,10 +76,13 @@ final class DnsTransportException extends DnsException {
   const DnsTransportException(super.message, {this.httpStatus});
 }
 
+/// An operation cancelled by its caller or by closing its transport.
 final class DnsCancelledException extends DnsException {
   const DnsCancelledException(super.message);
 }
 
+/// An operation that reached its own deadline. Connection establishment
+/// timeouts are reported as [DnsTransportException].
 final class DnsTimeoutException extends DnsException {
   const DnsTimeoutException(super.message);
 }
@@ -84,6 +98,8 @@ int effectiveDnsTtl(int ttl, {Duration age = Duration.zero}) {
   return max(0, (ttl > 0x7fffffff ? 0 : ttl) - age.inSeconds);
 }
 
+/// Lower-cases [name], strips one trailing dot, and checks it is a valid
+/// ASCII DNS name; throws [DnsInvalidNameException] otherwise.
 String normalizeDnsName(String name) {
   if (name.codeUnits.any((c) => c > 127)) {
     throw const DnsInvalidNameException("Use ASCII DNS names");
@@ -99,12 +115,15 @@ String normalizeDnsName(String name) {
   return value;
 }
 
+/// A question from a JSON DNS response.
 class DnsQuestion {
   final String name;
   final int type;
   const DnsQuestion(this.name, this.type);
 }
 
+/// A resource record from a JSON DNS response, in the resolver's
+/// presentation format. Parsed records hold an [effectiveDnsTtl].
 class DnsRecord {
   final String name;
   final int type;
@@ -117,6 +136,7 @@ class DnsRecord {
       required this.data});
 }
 
+/// The octets of one TXT RRset member, with its character-strings joined.
 class DnsTxtRecord {
   final String name;
   final int ttl;
@@ -129,6 +149,8 @@ class DnsTxtRecord {
     }
   }
 
+  /// [bytes] decoded as UTF-8; throws [DnsMalformedResponseException] if
+  /// they are not valid UTF-8.
   String get text {
     try {
       return utf8.decode(bytes);
@@ -138,8 +160,15 @@ class DnsTxtRecord {
   }
 }
 
+/// Where an [AuthenticatedTxtResult]'s authenticity claim comes from.
+///
+/// [resolverAsserted] means the HTTPS resolver set the AD flag; trust rests on
+/// that resolver. [locallyValidated] means some [DnsValidationIssuer] in this
+/// process vouched for it, so also check [AuthenticatedTxtResult.validator].
 enum DnsAuthentication { resolverAsserted, locallyValidated }
 
+/// The identity of a [DnsValidationIssuer]. Compare it with [identical];
+/// [name] is only a label and is not unique.
 final class DnsValidator {
   final String name;
   DnsValidator._(this.name);
@@ -148,6 +177,12 @@ final class DnsValidator {
   String toString() => 'DnsValidator($name)';
 }
 
+/// Mints [DnsAuthentication.locallyValidated] results for a local DNSSEC
+/// validator.
+///
+/// Anyone can construct an issuer, so `locallyValidated` alone proves nothing.
+/// Keep your issuer private and accept a result only when
+/// `identical(result.validator, myIssuer.validator)`.
 final class DnsValidationIssuer {
   final DnsValidator validator;
   DnsValidationIssuer(String name) : validator = DnsValidator._(name) {
@@ -155,6 +190,9 @@ final class DnsValidationIssuer {
   }
 
   // Call only after signatures are verified; this checks owner binding.
+  /// Issues evidence for [records] at [canonicalName], reached from
+  /// [question] through [aliases]. Call only after verifying the signatures;
+  /// this checks owner binding and bounds, not cryptography.
   AuthenticatedTxtResult issueTxt({
     required String question,
     required String canonicalName,
@@ -216,6 +254,11 @@ final class DnsValidationIssuer {
   }
 }
 
+/// TXT records whose authenticity is attested by [authentication].
+///
+/// Only this package can create one: from an AD-flagged resolver response, or
+/// through a [DnsValidationIssuer]. An empty [records] list is an
+/// authenticated NODATA answer.
 final class AuthenticatedTxtResult {
   final String question;
   final String canonicalName;
@@ -233,6 +276,7 @@ final class AuthenticatedTxtResult {
         aliases = List.unmodifiable(aliases);
 }
 
+/// A bounded, validated JSON DNS response from [resolver].
 class DnsResponse {
   final Uri resolver;
   final int status;
@@ -241,7 +285,8 @@ class DnsResponse {
   final bool? truncated;
   final List<DnsQuestion> questions;
   final List<DnsRecord> answers;
-  // Answer TTLs are already reduced by this HTTP cache age.
+
+  /// The HTTP cache age already subtracted from the answer TTLs.
   final Duration age;
   DnsResponse._(
       this.resolver,
@@ -253,6 +298,8 @@ class DnsResponse {
       this.answers,
       this.age);
 
+  /// Validates [json] from a DoH JSON API. Answer TTLs are reduced by the
+  /// response's HTTP cache [age] and normalized by [effectiveDnsTtl].
   factory DnsResponse.fromJson(Object? json,
       {required Uri resolver,
       int maxAnswers = 64,
@@ -327,6 +374,9 @@ class DnsResponse {
         age);
   }
 
+  /// The TXT records answering [domain], following at most [maxOwnerVisits]
+  /// owners through CNAMEs. Requires a successful, AD-flagged, untruncated
+  /// response with checking enabled and a single matching TXT question.
   AuthenticatedTxtResult authenticatedTxt(String domain,
       {required DnsTxtFormat txtFormat, int maxOwnerVisits = 8}) {
     domain = normalizeDnsName(domain);
