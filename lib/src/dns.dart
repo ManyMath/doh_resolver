@@ -40,11 +40,7 @@ final class DnsQueryFailedException extends DnsException {
 
 /// A response that was not marked authenticated, had checking disabled, or
 /// was truncated, so it carries no resolver DNSSEC assertion.
-///
-/// Local validators may extend this to report why their own validation did
-/// not establish a secure answer; `switch` over [DnsException] still treats
-/// every such subtype as this case.
-base class DnsAuthenticationUnavailableException extends DnsException {
+final class DnsAuthenticationUnavailableException extends DnsException {
   const DnsAuthenticationUnavailableException(super.message);
 }
 

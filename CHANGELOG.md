@@ -20,5 +20,4 @@
   and exchanges started with `preserveMessage`, keep their exact bytes. Reuse is
   off by default when a proxy is set.
 - Every failure is a subtype of the sealed `DnsException`, delivered through
-  `DnsOperation.result`; starting an operation never throws. Local validators
-  may extend `DnsAuthenticationUnavailableException` for their own failures.
+  `DnsOperation.result`; starting an operation never throws.

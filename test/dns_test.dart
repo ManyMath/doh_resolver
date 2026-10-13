@@ -100,7 +100,6 @@ void main() {
           DnsTimeoutException() => 'timeout',
         };
     expect(describe(const DnsAliasLoopException('loop')), 'alias');
-    expect(describe(const _LocalValidationException()), 'unauthenticated');
     expect(describe(const DnsQueryFailedException('x', rcode: 3)), 'rcode 3');
     expect(const DnsTimeoutException('late').toString(),
         'DnsTimeoutException: late');
@@ -516,10 +515,4 @@ class _ThrowingTransport implements DohTransport {
   DnsOperation<DohHttpResponse> start(Uri uri,
           {required int maxResponseBytes}) =>
       throw error;
-}
-
-/// What a local DNSSEC validator reports: the one open extension point.
-final class _LocalValidationException
-    extends DnsAuthenticationUnavailableException {
-  const _LocalValidationException() : super('bogus');
 }
