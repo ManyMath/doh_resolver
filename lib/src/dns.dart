@@ -193,7 +193,6 @@ final class DnsValidationIssuer {
     if (name.isEmpty) throw ArgumentError.value(name, 'name');
   }
 
-  // Call only after signatures are verified; this checks owner binding.
   /// Issues evidence for [records] at [canonicalName], reached from
   /// [question] through [aliases]. Call only after verifying the signatures;
   /// this checks owner binding and bounds, not cryptography.
