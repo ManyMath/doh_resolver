@@ -395,10 +395,14 @@ void main() {
     operation.cancel();
     expect(transport.uri, isNull);
   });
-  test('endpoints with undecodable query parameters are rejected up front', () {
+  test('endpoints with undecodable parameters or ports are rejected up front',
+      () {
     for (final endpoint in [
       'https://resolver.example/resolve?x=%FF',
       'https://resolver.example/resolve?%C3=1',
+      'https://resolver.example:0/resolve',
+      'https://resolver.example:70000/resolve',
+      'https://resolver.example:99999999999999999999/resolve',
     ]) {
       expect(
           () => DohResolver(

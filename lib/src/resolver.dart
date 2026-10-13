@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dns.dart';
+import 'wire.dart';
 
 /// A started request. Starting never throws: every failure, including
 /// invalid input, completes [result] with a [DnsException].
@@ -77,7 +78,7 @@ class DohResolver {
   /// Creates a resolver for [endpoint], Google's JSON API by default.
   ///
   /// Throws [ArgumentError] for a non-HTTPS, credential-bearing,
-  /// fragment-bearing or undecodable endpoint, invalid limits, or an unknown
+  /// fragment-bearing, unusably-ported or undecodable endpoint, invalid limits, or an unknown
   /// provider without [txtFormat]. Endpoint query parameters are kept,
   /// including repeated ones, except those the resolver sets itself.
   DohResolver(
@@ -91,10 +92,7 @@ class DohResolver {
             _knownTxtFormat(endpoint.host) ??
             (throw ArgumentError.value(endpoint, 'endpoint',
                 'Pass txtFormat: JSON TXT encoding differs between providers')) {
-    if (this.endpoint.scheme != 'https' ||
-        this.endpoint.host.isEmpty ||
-        this.endpoint.userInfo.isNotEmpty ||
-        this.endpoint.hasFragment) {
+    if (!isUsableDohEndpoint(this.endpoint)) {
       throw ArgumentError(
           'A credential-free HTTPS resolver endpoint is required');
     }

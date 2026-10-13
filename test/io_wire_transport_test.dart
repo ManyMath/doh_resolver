@@ -85,8 +85,11 @@ void main() {
   test('rejects invalid queries and URIs through the result, unconnected',
       () async {
     var requests = 0;
-    server.listen((_) => requests++);
-    final transport = IoDohTransport(securityContext: pki.clientContext());
+    serve(inspect: (_, __) => requests++);
+    // One slot: a rejected start that leaked it would hang the valid request.
+    final transport = IoDohTransport(
+        securityContext: pki.clientContext(), maxConcurrentRequests: 1);
+    addTearDown(transport.close);
     for (final query in [
       <int>[],
       wireReply(),
@@ -100,6 +103,10 @@ void main() {
       endpoint().replace(scheme: 'http'),
       endpoint().replace(userInfo: 'user'),
       endpoint().replace(fragment: 'x'),
+      endpoint().replace(port: 0),
+      endpoint().replace(port: 70000),
+      // Uri.parse accepts this; reading the port throws FormatException.
+      Uri.parse('https://localhost:99999999999999999999/dns-query'),
     ]) {
       await expectLater(
           transport.startWire(uri, wireQuery(), maxResponseBytes: 512).result,
@@ -113,6 +120,11 @@ void main() {
             .result,
         throwsA(isA<DnsInvalidQueryException>()));
     expect(requests, 0);
+    final response = await transport
+        .startWire(endpoint(), wireQuery(), maxResponseBytes: 512)
+        .result;
+    expect(response.statusCode, 200);
+    expect(requests, 1);
   });
 
   for (final (name, code, status, type, reply) in [

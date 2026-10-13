@@ -122,11 +122,9 @@ class IoDohTransport implements DohTransport, DohWireTransport {
 
   DnsOperation<DohHttpResponse> _start(Uri uri, int maxResponseBytes,
       [List<int>? query, bool preserved = false]) {
-    if (uri.scheme != 'https' ||
-        uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty ||
-        uri.hasFragment ||
-        maxResponseBytes < 1) {
+    // Checked before any request state exists: an unreadable port would
+    // otherwise throw from _origin after _active was already taken.
+    if (!isUsableDohEndpoint(uri) || maxResponseBytes < 1) {
       return DnsOperation.failed(
           const DnsInvalidQueryException('Expected a bounded HTTPS request'));
     }
