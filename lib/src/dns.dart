@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 enum DnsError {
   invalidName,
@@ -26,6 +27,9 @@ class DnsException implements Exception {
 }
 
 final _label = RegExp(r'^[a-z0-9_-]+$');
+
+// RFC 2181 §8: a received TTL with the most significant bit set means zero.
+int _ttl(int ttl) => ttl > 0x7fffffff ? 0 : ttl;
 
 String normalizeDnsName(String name) {
   if (name.codeUnits.any((c) => c > 127)) {
@@ -124,8 +128,8 @@ final class DnsValidationIssuer {
         throw const DnsException(
             DnsError.malformedResponse, 'Invalid validated CNAME chain');
       }
-      chain.add(
-          DnsRecord(name: owner, type: 5, ttl: alias.ttl, data: alias.data));
+      chain.add(DnsRecord(
+          name: owner, type: 5, ttl: _ttl(alias.ttl), data: alias.data));
       owner = normalizeDnsName(alias.data);
       if (!seen.add(owner)) {
         throw const DnsException(DnsError.aliasLoop, 'CNAME loop');
@@ -141,7 +145,7 @@ final class DnsValidationIssuer {
         resolver,
         [
           for (final r in records)
-            DnsTxtRecord(name: canonicalName, ttl: r.ttl, bytes: r.bytes)
+            DnsTxtRecord(name: canonicalName, ttl: _ttl(r.ttl), bytes: r.bytes)
         ],
         chain,
         null,
@@ -175,11 +179,23 @@ class DnsResponse {
   final bool? truncated;
   final List<DnsQuestion> questions;
   final List<DnsRecord> answers;
-  DnsResponse._(this.resolver, this.status, this.authenticatedData,
-      this.checkingDisabled, this.truncated, this.questions, this.answers);
+  // Answer TTLs are already reduced by this HTTP cache age.
+  final Duration age;
+  DnsResponse._(
+      this.resolver,
+      this.status,
+      this.authenticatedData,
+      this.checkingDisabled,
+      this.truncated,
+      this.questions,
+      this.answers,
+      this.age);
 
   factory DnsResponse.fromJson(Object? json,
-      {required Uri resolver, int maxAnswers = 64}) {
+      {required Uri resolver,
+      int maxAnswers = 64,
+      Duration age = Duration.zero}) {
+    if (age < Duration.zero) throw ArgumentError.value(age, 'age');
     const malformed =
         DnsException(DnsError.malformedResponse, 'Invalid DNS JSON response');
     if (json is! Map<String, dynamic> || json['Status'] is! int) {
@@ -236,7 +252,7 @@ class DnsResponse {
       answers.add(DnsRecord(
           name: name(a['name']),
           type: a['type'] as int,
-          ttl: a['TTL'] as int,
+          ttl: max(0, _ttl(a['TTL'] as int) - age.inSeconds),
           data: a['data'] as String));
     }
     return DnsResponse._(
@@ -246,7 +262,8 @@ class DnsResponse {
         flag('CD'),
         flag('TC'),
         List.unmodifiable(questions),
-        List.unmodifiable(answers));
+        List.unmodifiable(answers),
+        age);
   }
 
   AuthenticatedTxtResult authenticatedTxt(String domain,

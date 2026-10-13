@@ -190,6 +190,51 @@ void main() {
         .lookupTxt('alice.example');
     expect(result.records, hasLength(1));
   });
+  for (final (header, seconds) in [
+    (null, 0),
+    ('250', 250),
+    (' 7 ', 7),
+    ('000000000001', 1),
+    ('00000000000000000000', 0),
+    ('2147483648', 0x80000000),
+    ('99999999999', 0x80000000),
+    ('000099999999999', 0x80000000),
+    ('250, 0', 250),
+    ('5,abc', 5),
+    (', 5', 0),
+    ('-5', 0),
+    ('1.5', 0),
+    ('abc', 0),
+  ]) {
+    test('reports HTTP Age header $header as $seconds seconds', () async {
+      server.listen((r) {
+        r.response.headers.contentType = ContentType.json;
+        if (header != null) {
+          r.response.headers.set(HttpHeaders.ageHeader, header);
+        }
+        r.response.write(jsonEncode(reply()));
+        r.response.close();
+      });
+      final response = await IoDohTransport(securityContext: trust)
+          .start(endpoint(), maxResponseBytes: 65536)
+          .result;
+      expect(response.age, Duration(seconds: seconds));
+    });
+  }
+  test('uses the first of repeated HTTP Age headers', () async {
+    server.listen((r) {
+      r.response.headers
+        ..contentType = ContentType.json
+        ..add(HttpHeaders.ageHeader, '250')
+        ..add(HttpHeaders.ageHeader, '0');
+      r.response.write(jsonEncode(reply()));
+      r.response.close();
+    });
+    final response = await IoDohTransport(securityContext: trust)
+        .start(endpoint(), maxResponseBytes: 65536)
+        .result;
+    expect(response.age, const Duration(seconds: 250));
+  });
   for (final (type, encoding) in [
     (null, null),
     (ContentType.text, null),

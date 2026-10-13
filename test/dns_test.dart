@@ -189,7 +189,30 @@ void main() {
             .records
             .single
             .ttl,
-        0xffffffff);
+        0);
+  });
+  test('TTLs with the high bit set are treated as zero', () {
+    for (final (raw, ttl) in [(0x7fffffff, 0x7fffffff), (0x80000000, 0)]) {
+      final result = decode(reply(answers: [
+        rr('alice.example', 5, 'pay.example')..['TTL'] = raw,
+        rr('pay.example', 16, 'x')..['TTL'] = raw,
+      ])).authenticatedTxt('alice.example');
+      expect(result.records.single.ttl, ttl);
+      expect(result.aliases.single.ttl, ttl);
+      final issued = DnsValidationIssuer('test').issueTxt(
+          question: 'alice.example',
+          canonicalName: 'pay.example',
+          resolver: Uri.https('resolver.example', '/dns-query'),
+          records: [
+            DnsTxtRecord(name: 'pay.example', ttl: raw, bytes: [1])
+          ],
+          aliases: [
+            DnsRecord(
+                name: 'alice.example', type: 5, ttl: raw, data: 'pay.example')
+          ]);
+      expect(issued.records.single.ttl, ttl);
+      expect(issued.aliases.single.ttl, ttl);
+    }
   });
   test('malformed and overlong TXT cannot turn into recipient data', () {
     for (final s in [
@@ -278,6 +301,26 @@ void main() {
       await Future<void>.delayed(Duration.zero);
     });
   }
+  test('HTTP cache age reduces TTLs and never drives them negative', () async {
+    for (final (age, ttl) in [(0, 60), (25, 35), (60, 0), (250, 0)]) {
+      final transport = FakeTransport();
+      final result =
+          DohResolver(transport: transport).lookupTxt('alice.example');
+      transport.completer.complete(DohHttpResponse(
+          200,
+          utf8.encode(jsonEncode(reply(answers: [
+            rr('alice.example', 5, 'pay.example'),
+            rr('pay.example', 16, 'x'),
+          ]))),
+          age: Duration(seconds: age)));
+      final txt = await result;
+      expect(txt.records.single.ttl, ttl);
+      expect(txt.aliases.single.ttl, ttl);
+      expect(txt.response!.age, Duration(seconds: age));
+    }
+    expect(() => DohHttpResponse(200, [], age: const Duration(seconds: -1)),
+        throwsArgumentError);
+  });
   test('rejects HTTP, JSON and injected response limit violations', () async {
     for (final response in [
       DohHttpResponse(302, []),

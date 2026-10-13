@@ -27,3 +27,10 @@ only for the same HTTPS origin and while transaction IDs remain unique on that
 connection; malformed, cancelled, timed-out, or failed exchanges retire the
 connection. `maxConcurrentRequests` and `maxQueuedRequests` bound admitted
 work; a full queue fails new operations with `DnsError.transport`.
+
+## Cache age
+
+RFC 8484 requires DNS TTLs to be reduced by the HTTP `Age` of a response.
+`DohResolver` applies this to JSON answers, flooring TTLs at zero. Wire-format
+bodies are returned unmodified; callers must subtract `DohHttpResponse.age`
+from any TTL they decode.

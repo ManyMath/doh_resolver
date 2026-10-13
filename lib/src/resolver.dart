@@ -11,8 +11,12 @@ class DnsOperation<T> {
 class DohHttpResponse {
   final int statusCode;
   final List<int> body;
-  DohHttpResponse(this.statusCode, List<int> body)
-      : body = List.unmodifiable(body);
+  // Time the response spent in HTTP caches; DNS TTLs must be reduced by it.
+  final Duration age;
+  DohHttpResponse(this.statusCode, List<int> body, {this.age = Duration.zero})
+      : body = List.unmodifiable(body) {
+    if (age < Duration.zero) throw ArgumentError.value(age, 'age');
+  }
 }
 
 abstract interface class DohTransport {
@@ -96,8 +100,9 @@ class DohResolver {
               DnsError.responseTooLarge, 'DNS body exceeds limit');
         }
         final body = jsonDecode(utf8.decode(response.body));
-        result.complete(DnsResponse.fromJson(body, resolver: endpoint)
-            .authenticatedTxt(domain));
+        result.complete(
+            DnsResponse.fromJson(body, resolver: endpoint, age: response.age)
+                .authenticatedTxt(domain));
       } on DnsException catch (error, stack) {
         result.completeError(error, stack);
       } on FormatException catch (_, stack) {

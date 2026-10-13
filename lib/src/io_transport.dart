@@ -226,6 +226,17 @@ class IoDohTransport implements DohTransport, DohWireTransport {
   }
 }
 
+// RFC 9111 §5.1: use the first member of a list-valued or repeated Age, and
+// ignore it if that member is not delta-seconds. Values beyond 2^31 saturate.
+Duration _age(List<String>? values) {
+  if (values == null || values.isEmpty) return Duration.zero;
+  final first = values.first.split(',').first.trim();
+  if (!RegExp(r'^[0-9]+$').hasMatch(first)) return Duration.zero;
+  final digits = first.replaceFirst(RegExp(r'^0+'), '');
+  final seconds = digits.length > 10 ? null : int.parse('0$digits');
+  return Duration(seconds: min(seconds ?? 0x80000000, 0x80000000));
+}
+
 typedef _Origin = ({String scheme, String host, int port});
 
 _Origin _origin(Uri uri) => (
@@ -331,7 +342,8 @@ class _IoRequest {
       }
       final body = bytes.takeBytes();
       if (query != null) validateDnsWireResponse(query!, body);
-      _finish(DohHttpResponse(response.statusCode, body));
+      _finish(DohHttpResponse(response.statusCode, body,
+          age: _age(response.headers[HttpHeaders.ageHeader])));
     } catch (error, stack) {
       _finish(
           error is DnsException
