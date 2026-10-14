@@ -85,17 +85,20 @@ class DnsResponse {
       this.age);
 
   /// Validates [json] from a DoH JSON API. Answer TTLs are reduced by the
-  /// response's HTTP cache [age] and normalized by [effectiveDnsTtl].
+  /// response's HTTP cache [age] and normalized by [effectiveDnsTtl]. The
+  /// `Question` and `Answer` lists are each bounded by [maxAnswers].
   factory DnsResponse.fromJson(Object? json,
       {required Uri resolver,
       int maxAnswers = 64,
       Duration age = Duration.zero}) {
     if (age < Duration.zero) throw ArgumentError.value(age, 'age');
+    if (maxAnswers < 0) throw ArgumentError.value(maxAnswers, 'maxAnswers');
     const malformed =
         DnsMalformedResponseException('Invalid DNS JSON response');
-    if (json is! Map<String, dynamic> || json['Status'] is! int) {
-      throw malformed;
-    }
+    if (json is! Map<String, dynamic>) throw malformed;
+    final status = json['Status'];
+    // Extended RCODEs are 12 bits; providers have no reason to exceed 16.
+    if (status is! int || status < 0 || status > 0xffff) throw malformed;
     bool? flag(String name) {
       final value = json[name];
       if (value != null && value is! bool) throw malformed;
@@ -104,10 +107,9 @@ class DnsResponse {
 
     final rawQuestions = json['Question'];
     final rawAnswers = json['Answer'] ?? <Object>[];
-    if (rawQuestions is! List ||
-        rawQuestions.length > 64 ||
-        rawAnswers is! List) {
-      throw malformed;
+    if (rawQuestions is! List || rawAnswers is! List) throw malformed;
+    if (rawQuestions.length > maxAnswers) {
+      throw const DnsResponseTooLargeException('Too many DNS questions');
     }
     if (rawAnswers.length > maxAnswers) {
       throw const DnsResponseTooLargeException('Too many DNS answers');
@@ -149,15 +151,8 @@ class DnsResponse {
           ttl: effectiveDnsTtl(a['TTL'] as int, age: age),
           data: a['data'] as String));
     }
-    return DnsResponse._(
-        resolver,
-        json['Status'] as int,
-        flag('AD'),
-        flag('CD'),
-        flag('TC'),
-        List.unmodifiable(questions),
-        List.unmodifiable(answers),
-        age);
+    return DnsResponse._(resolver, status, flag('AD'), flag('CD'), flag('TC'),
+        List.unmodifiable(questions), List.unmodifiable(answers), age);
   }
 
   /// The TXT records answering [domain], following at most [maxOwnerVisits]

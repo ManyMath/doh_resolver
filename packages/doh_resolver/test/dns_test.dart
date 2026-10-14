@@ -20,8 +20,9 @@ Map<String, Object?> rr(String name, int type, String data) => {
       'TTL': 60,
       'data': data,
     };
-DnsResponse decode(Object? json) => DnsResponse.fromJson(json,
-    resolver: Uri.parse('https://dns.example/resolve'));
+final resolver = Uri.parse('https://dns.example/resolve');
+DnsResponse decode(Object? json) =>
+    DnsResponse.fromJson(json, resolver: resolver);
 
 class FakeTransport implements DohTransport {
   final completer = Completer<DohHttpResponse>();
@@ -76,6 +77,31 @@ void main() {
             .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
         throwsA(
             isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
+  });
+  test('Status must be an in-range RCODE', () {
+    for (final status in [-1, 0x10000, 1.0, '0', null]) {
+      expect(() => decode(reply()..['Status'] = status),
+          throwsA(isA<DnsMalformedResponseException>()),
+          reason: '$status');
+    }
+    expect(decode(reply()..['Status'] = 0xffff).status, 0xffff);
+  });
+  test('maxAnswers bounds the question and answer lists alike', () {
+    final question = {'name': 'alice.example.', 'type': 16};
+    final answer = rr('alice.example.', 16, 'x');
+    for (final (field, item) in [('Question', question), ('Answer', answer)]) {
+      final body = reply()..[field] = List.filled(3, item);
+      expect(
+          () => DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 2),
+          throwsA(isA<DnsResponseTooLargeException>()),
+          reason: field);
+      expect(DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 3),
+          isA<DnsResponse>(),
+          reason: field);
+    }
+    expect(
+        () => DnsResponse.fromJson(reply(), resolver: resolver, maxAnswers: -1),
+        throwsArgumentError);
   });
   test('HTTP failures carry the status', () async {
     final transport = FakeTransport();
