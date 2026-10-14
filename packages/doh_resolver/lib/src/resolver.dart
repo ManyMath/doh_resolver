@@ -21,15 +21,13 @@ class DohResolver {
   /// How [endpoint] writes TXT data. Known Google and Cloudflare hosts get
   /// their format by default; any other endpoint must pass it explicitly.
   final DnsTxtFormat txtFormat;
-  // Decoded once so a malformed endpoint fails construction, not each lookup.
   late final Map<String, List<String>> _endpointParameters;
 
   /// Creates a resolver for [endpoint], Google's JSON API by default.
   ///
-  /// Throws [ArgumentError] for a non-HTTPS, credential-bearing,
-  /// fragment-bearing, unusably-ported or undecodable endpoint, invalid limits, or an unknown
-  /// provider without [txtFormat]. Endpoint query parameters are kept,
-  /// including repeated ones, except those the resolver sets itself.
+  /// Throws [ArgumentError] for an unusable [endpoint], invalid limits, or an
+  /// unknown provider without [txtFormat]. Endpoint query parameters are kept
+  /// except those the resolver sets itself.
   DohResolver(
       {required this.transport,
       Uri? endpoint,
@@ -62,11 +60,9 @@ class DohResolver {
 
   /// Starts a cancellable TXT lookup for [domain].
   ///
-  /// The request asks for DNSSEC data with checking enabled, sends
-  /// `edns_client_subnet=0.0.0.0/0` (honoured by providers that implement it,
-  /// such as Google), and pads the URL to a multiple of 128 characters so the
-  /// name length is hidden. Never throws: every failure is a [DnsException] in
-  /// the result.
+  /// Sends `do=true`, `cd=false` and `edns_client_subnet=0.0.0.0/0`, and pads
+  /// the URL to a multiple of 128 characters. Never throws: every failure is a
+  /// [DnsException] in the result.
   DnsOperation<ResolverAssertedTxtResult> startTxtLookup(String domain) {
     try {
       domain = normalizeDnsName(domain);
@@ -83,7 +79,6 @@ class DohResolver {
       'edns_client_subnet': '0.0.0.0/0',
       'random_padding': 'X',
     };
-    // The JSON API ignores this value; it hides the name length in 128-octet blocks.
     final length =
         endpoint.replace(queryParameters: parameters).toString().length;
     parameters['random_padding'] = 'X' * (1 + (128 - length % 128) % 128);
@@ -99,8 +94,6 @@ class DohResolver {
     }
     final result = Completer<ResolverAssertedTxtResult>();
     late Timer timer;
-    // Only an unfinished transport operation is cancelled; once its result
-    // has completed, the transport owns no further work for this lookup.
     void abort(DnsException error) {
       if (result.isCompleted) return;
       result.completeError(error);
@@ -133,7 +126,6 @@ class DohResolver {
             const DnsMalformedResponseException('Invalid DNS JSON encoding'),
             stack);
       } catch (_, stack) {
-        // The deadline is cancelled below, so every outcome must complete here.
         result.completeError(
             const DnsMalformedResponseException('Unreadable DNS response'),
             stack);

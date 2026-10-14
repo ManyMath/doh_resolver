@@ -43,8 +43,6 @@ class DnsQuestion {
 
 /// TXT records from an AD-flagged resolver response. An empty [records] list is
 /// a NODATA answer the resolver asserts is authenticated.
-///
-/// Records only the resolver's AD assertion; it is not validation evidence.
 final class ResolverAssertedTxtResult {
   final String question;
   final String canonicalName;
@@ -58,8 +56,7 @@ final class ResolverAssertedTxtResult {
         aliases = List.unmodifiable(aliases);
 
   /// How long the answer may be cached, in seconds: the smallest TTL over
-  /// [records] and the [aliases] leading to them. Null for a NODATA answer,
-  /// whose negative lifetime comes from an SOA the JSON API does not return.
+  /// [records] and the [aliases] leading to them. Null for a NODATA answer.
   int? get ttl {
     if (records.isEmpty) return null;
     return [
@@ -69,7 +66,6 @@ final class ResolverAssertedTxtResult {
   }
 }
 
-/// Use [ResolverAssertedTxtResult]: the result asserts nothing itself.
 @Deprecated('Use ResolverAssertedTxtResult')
 typedef AuthenticatedTxtResult = ResolverAssertedTxtResult;
 
@@ -108,7 +104,6 @@ class DnsResponse {
         DnsMalformedResponseException('Invalid DNS JSON response');
     if (json is! Map<String, dynamic>) throw malformed;
     final status = json['Status'];
-    // Extended RCODEs are 12 bits; providers have no reason to exceed 16.
     if (status is! int || status < 0 || status > 0xffff) throw malformed;
     bool? flag(String name) {
       final value = json[name];
@@ -224,8 +219,7 @@ class DnsResponse {
   }
 }
 
-/// How a JSON DoH resolver writes TXT `data`. Providers differ and a value
-/// alone cannot reveal which form it is in, so the format is set per endpoint.
+/// How a JSON DoH resolver writes TXT `data`; set per endpoint.
 enum DnsTxtFormat {
   /// Quoted RFC 1035 character-strings separated by spaces, with `\DDD`
   /// decimal and `\X` literal escapes, as Cloudflare returns them.
@@ -236,8 +230,7 @@ enum DnsTxtFormat {
   raw,
 }
 
-/// Decodes JSON TXT `data` in [format] to the record's octets. DNS decimal
-/// escapes encode octets, so UTF-8 is decoded only after chunks are joined.
+/// Decodes JSON TXT `data` in [format] to the record's octets.
 List<int> decodeDnsTxtBytes(String value, DnsTxtFormat format,
     {int maxPresentationLength = 8192}) {
   if (value.length > maxPresentationLength) {
