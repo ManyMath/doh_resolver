@@ -56,6 +56,17 @@ final class ResolverAssertedTxtResult {
       List<DnsTxtRecord> records, List<DnsRecord> aliases, this.response)
       : records = List.unmodifiable(records),
         aliases = List.unmodifiable(aliases);
+
+  /// How long the answer may be cached, in seconds: the smallest TTL over
+  /// [records] and the [aliases] leading to them. Null for a NODATA answer,
+  /// whose negative lifetime comes from an SOA the JSON API does not return.
+  int? get ttl {
+    if (records.isEmpty) return null;
+    return [
+      for (final record in records) record.ttl,
+      for (final alias in aliases) alias.ttl,
+    ].reduce((a, b) => a < b ? a : b);
+  }
 }
 
 /// Use [ResolverAssertedTxtResult]: the result asserts nothing itself.

@@ -12,6 +12,7 @@ final transport = IoDohTransport();
 try {
   final result =
       await DohResolver(transport: transport).lookupTxt('example.com');
+  print('cache for ${result.ttl}s');
   for (final record in result.records) {
     print(record.text);
   }

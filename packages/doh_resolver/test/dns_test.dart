@@ -78,6 +78,22 @@ void main() {
         throwsA(
             isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
   });
+  test('ttl is the minimum over the CNAME chain and null for NODATA', () {
+    ResolverAssertedTxtResult txt(List<Map<String, Object?>> answers) =>
+        decode(reply(answers: answers))
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw);
+    expect(
+        txt([
+          rr('alice.example', 5, 'pay.example')..['TTL'] = 30,
+          rr('pay.example', 5, 'txt.example')..['TTL'] = 300,
+          rr('txt.example', 16, 'one')..['TTL'] = 90,
+          rr('txt.example', 16, 'two')..['TTL'] = 45,
+        ]).ttl,
+        30);
+    expect(txt([rr('alice.example', 16, 'x')..['TTL'] = 7]).ttl, 7);
+    expect(txt([rr('alice.example', 5, 'pay.example')]).ttl, isNull);
+    expect(txt([]).ttl, isNull);
+  });
   test('Status must be an in-range RCODE', () {
     for (final status in [-1, 0x10000, 1.0, '0', null]) {
       expect(() => decode(reply()..['Status'] = status),

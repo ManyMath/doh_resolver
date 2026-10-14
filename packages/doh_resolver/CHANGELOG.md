@@ -5,6 +5,7 @@
 - Breaking: `DnsException` is `doh_transport`'s open base class, so exhaustive switches over it no longer compile.
 - Breaking: `AuthenticatedTxtResult` is renamed `ResolverAssertedTxtResult`; the old name is a deprecated typedef for one release.
 - `DnsResponse.fromJson` rejects an out-of-range `Status` and bounds `Question` by `maxAnswers`.
+- `ResolverAssertedTxtResult.ttl` is the minimum TTL over the records and their CNAME chain.
 
 ## 0.0.1 - unreleased
 
