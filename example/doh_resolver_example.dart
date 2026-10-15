@@ -14,7 +14,7 @@ Future<void> main(List<String> arguments) async {
       for (final record in result.records) {
         print('${record.name} TTL=${record.ttl}: ${record.text}');
       }
-    } on DnsException catch (error) {
+    } on DohResolverException catch (error) {
       print('Lookup rejected: $error');
     }
   } finally {

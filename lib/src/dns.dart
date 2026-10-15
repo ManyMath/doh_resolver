@@ -1,37 +1,187 @@
 import 'dart:convert';
 
-import 'package:doh_transport/doh_transport.dart';
+import 'package:doh_transport/doh_transport.dart'
+    show
+        DohInvalidNameException,
+        DohTransportException,
+        effectiveDnsTtl,
+        normalizeDnsName;
+
+/// Every deliberately reported failure from this resolver package.
+sealed class DohResolverException implements Exception {
+  final String message;
+  const DohResolverException(this.message);
+
+  @override
+  String toString() => '$runtimeType: $message';
+}
+
+/// The requested name is not a valid ASCII DNS name.
+final class DohResolverInvalidNameException extends DohResolverException {
+  final DohTransportException? cause;
+  const DohResolverInvalidNameException(super.message, {this.cause});
+}
+
+/// A resolver response does not parse or is internally inconsistent.
+final class DohResolverMalformedResponseException extends DohResolverException {
+  final Object? cause;
+  const DohResolverMalformedResponseException(super.message, {this.cause});
+}
+
+enum DohResolverLimitKind {
+  responseBytes,
+  questions,
+  answers,
+  txtPresentation,
+}
+
+/// A response exceeded a configured byte or item bound.
+final class DohResolverResponseTooLargeException extends DohResolverException {
+  final DohResolverLimitKind kind;
+  final int maximum;
+  final int? actual;
+  final DohTransportException? cause;
+  const DohResolverResponseTooLargeException(super.message,
+      {required this.kind, required this.maximum, this.actual, this.cause});
+
+  @override
+  String toString() => '$runtimeType(kind: ${kind.name}, maximum: $maximum, '
+      'actual: $actual): $message';
+}
+
+/// A response does not answer the requested TXT question.
+final class DohResolverQuestionMismatchException extends DohResolverException {
+  final DohTransportException? cause;
+  const DohResolverQuestionMismatchException(super.message, {this.cause});
+}
+
+/// The resolver returned a non-success HTTP [statusCode].
+final class DohResolverHttpStatusException extends DohResolverException {
+  final int statusCode;
+  final DohTransportException? cause;
+  const DohResolverHttpStatusException(super.message,
+      {required this.statusCode, this.cause});
+
+  @override
+  String toString() => '$runtimeType(statusCode: $statusCode): $message';
+}
+
+/// An upstream transport failure that has no more specific resolver mapping.
+///
+/// [cause] is retained but omitted from [toString] because it can contain
+/// endpoint details.
+final class DohResolverTransportException extends DohResolverException {
+  final Object cause;
+  const DohResolverTransportException(super.message, {required this.cause});
+}
+
+/// The upstream transport reached its own [timeout].
+final class DohResolverTransportTimeoutException extends DohResolverException {
+  final Duration timeout;
+  final DohTransportException cause;
+  const DohResolverTransportTimeoutException(super.message,
+      {required this.timeout, required this.cause});
+
+  @override
+  String toString() => '$runtimeType(timeout: $timeout): $message';
+}
+
+/// The whole resolver lookup reached its [timeout].
+final class DohResolverLookupTimeoutException extends DohResolverException {
+  final Duration timeout;
+  const DohResolverLookupTimeoutException(super.message,
+      {required this.timeout});
+
+  @override
+  String toString() => '$runtimeType(timeout: $timeout): $message';
+}
+
+enum DohResolverCancellationSource { caller, transport }
+
+/// A lookup was cancelled by its caller or by the upstream transport.
+final class DohResolverCancelledException extends DohResolverException {
+  final DohResolverCancellationSource source;
+  final DohTransportException? cause;
+  const DohResolverCancelledException(super.message,
+      {required this.source, this.cause});
+
+  @override
+  String toString() => '$runtimeType(source: ${source.name}): $message';
+}
 
 /// The resolver answered with a non-zero DNS RCODE, such as 3 (NXDOMAIN).
-final class DnsQueryFailedException extends DnsException {
+final class DohResolverQueryFailedException extends DohResolverException {
   final int rcode;
-  const DnsQueryFailedException(super.message, {required this.rcode});
+  const DohResolverQueryFailedException(super.message, {required this.rcode});
+
+  @override
+  String toString() => '$runtimeType(rcode: $rcode): $message';
 }
 
 /// A response that was not marked authenticated, had checking disabled, or
 /// was truncated, so it carries no resolver DNSSEC assertion.
-final class DnsAuthenticationUnavailableException extends DnsException {
-  const DnsAuthenticationUnavailableException(super.message);
+final class DohResolverAuthenticationUnavailableException
+    extends DohResolverException {
+  const DohResolverAuthenticationUnavailableException(super.message);
 }
 
 /// The answer's CNAME chain could not be followed to a single owner.
-sealed class DnsAliasException extends DnsException {
-  const DnsAliasException(super.message);
+sealed class DohResolverAliasException extends DohResolverException {
+  const DohResolverAliasException(super.message);
 }
 
 /// A CNAME chain that revisits an owner.
-final class DnsAliasLoopException extends DnsAliasException {
-  const DnsAliasLoopException(super.message);
+final class DohResolverAliasLoopException extends DohResolverAliasException {
+  const DohResolverAliasLoopException(super.message);
 }
 
 /// An owner with several CNAMEs, or with both a CNAME and TXT records.
-final class DnsAliasAmbiguousException extends DnsAliasException {
-  const DnsAliasAmbiguousException(super.message);
+final class DohResolverAliasAmbiguousException
+    extends DohResolverAliasException {
+  const DohResolverAliasAmbiguousException(super.message);
 }
 
 /// A CNAME chain longer than the configured owner limit.
-final class DnsAliasTooLongException extends DnsAliasException {
-  const DnsAliasTooLongException(super.message);
+final class DohResolverAliasTooLongException extends DohResolverAliasException {
+  const DohResolverAliasTooLongException(super.message);
+}
+
+/// A DNS resource record with a normalized owner and presentation data.
+class DnsRecord {
+  final String name;
+  final int type;
+  final int ttl;
+  final String data;
+  const DnsRecord({
+    required this.name,
+    required this.type,
+    required this.ttl,
+    required this.data,
+  });
+}
+
+/// The octets of one TXT RRset member, with its character-strings joined.
+class DnsTxtRecord {
+  final String name;
+  final int ttl;
+  final List<int> bytes;
+  DnsTxtRecord({
+    required this.name,
+    required this.ttl,
+    required List<int> bytes,
+  }) : bytes = List.unmodifiable(bytes) {
+    if (this.bytes.any((byte) => byte < 0 || byte > 255)) {
+      throw ArgumentError.value(bytes, 'bytes', 'TXT data must be octets');
+    }
+  }
+
+  String get text {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      throw const DohResolverMalformedResponseException('TXT is not UTF-8');
+    }
+  }
 }
 
 /// A question from a JSON DNS response.
@@ -98,7 +248,7 @@ class DnsResponse {
     if (age < Duration.zero) throw ArgumentError.value(age, 'age');
     if (maxAnswers < 0) throw ArgumentError.value(maxAnswers, 'maxAnswers');
     const malformed =
-        DnsMalformedResponseException('Invalid DNS JSON response');
+        DohResolverMalformedResponseException('Invalid DNS JSON response');
     if (json is! Map<String, dynamic>) throw malformed;
     final status = json['Status'];
     if (status is! int || status < 0 || status > 0xffff) throw malformed;
@@ -112,16 +262,22 @@ class DnsResponse {
     final rawAnswers = json['Answer'] ?? <Object>[];
     if (rawQuestions is! List || rawAnswers is! List) throw malformed;
     if (rawQuestions.length > maxAnswers) {
-      throw const DnsResponseTooLargeException('Too many DNS questions');
+      throw DohResolverResponseTooLargeException('Too many DNS questions',
+          kind: DohResolverLimitKind.questions,
+          maximum: maxAnswers,
+          actual: rawQuestions.length);
     }
     if (rawAnswers.length > maxAnswers) {
-      throw const DnsResponseTooLargeException('Too many DNS answers');
+      throw DohResolverResponseTooLargeException('Too many DNS answers',
+          kind: DohResolverLimitKind.answers,
+          maximum: maxAnswers,
+          actual: rawAnswers.length);
     }
     String name(Object? input) {
       if (input is! String) throw malformed;
       try {
         return normalizeDnsName(input);
-      } on DnsException {
+      } on DohInvalidNameException {
         throw malformed;
       }
     }
@@ -165,25 +321,25 @@ class DnsResponse {
       {required DnsTxtFormat txtFormat, int maxOwnerVisits = 8}) {
     domain = normalizeDnsName(domain);
     if (status != 0) {
-      throw DnsQueryFailedException('DNS query failed', rcode: status);
+      throw DohResolverQueryFailedException('DNS query failed', rcode: status);
     }
     if (authenticatedData != true ||
         checkingDisabled != false ||
         truncated != false) {
-      throw const DnsAuthenticationUnavailableException(
+      throw const DohResolverAuthenticationUnavailableException(
           'Authenticated complete DNS response required');
     }
     if (questions.length != 1 ||
         questions.single.type != 16 ||
         questions.single.name != domain) {
-      throw const DnsQuestionMismatchException('DNS question mismatch');
+      throw const DohResolverQuestionMismatchException('DNS question mismatch');
     }
     var owner = domain;
     final seen = <String>{};
     final aliases = <DnsRecord>[];
     for (var visit = 0; visit < maxOwnerVisits; visit++) {
       if (!seen.add(owner)) {
-        throw const DnsAliasLoopException('CNAME loop');
+        throw const DohResolverAliasLoopException('CNAME loop');
       }
       final records = answers.where((record) => record.name == owner);
       final cnames = records.where((record) => record.type == 5).toList();
@@ -203,16 +359,18 @@ class DnsResponse {
             this);
       }
       if (cnames.length != 1 || txt.isNotEmpty) {
-        throw const DnsAliasAmbiguousException('Ambiguous CNAME owner');
+        throw const DohResolverAliasAmbiguousException('Ambiguous CNAME owner');
       }
       aliases.add(cnames.single);
       try {
         owner = normalizeDnsName(cnames.single.data);
-      } on DnsException {
-        throw const DnsMalformedResponseException('Invalid CNAME target');
+      } on DohInvalidNameException {
+        throw const DohResolverMalformedResponseException(
+            'Invalid CNAME target');
       }
     }
-    throw const DnsAliasTooLongException('CNAME chain exceeds owner limit');
+    throw const DohResolverAliasTooLongException(
+        'CNAME chain exceeds owner limit');
   }
 }
 
@@ -231,9 +389,13 @@ enum DnsTxtFormat {
 List<int> decodeDnsTxtBytes(String value, DnsTxtFormat format,
     {int maxPresentationLength = 8192}) {
   if (value.length > maxPresentationLength) {
-    throw const DnsResponseTooLargeException('TXT presentation exceeds limit');
+    throw DohResolverResponseTooLargeException('TXT presentation exceeds limit',
+        kind: DohResolverLimitKind.txtPresentation,
+        maximum: maxPresentationLength,
+        actual: value.length);
   }
-  const malformed = DnsMalformedResponseException('Malformed TXT presentation');
+  const malformed =
+      DohResolverMalformedResponseException('Malformed TXT presentation');
   // utf8.encode would silently turn these into U+FFFD, altering the octets.
   for (var i = 0; i < value.length; i++) {
     final unit = value.codeUnitAt(i);

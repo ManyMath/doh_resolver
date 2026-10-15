@@ -16,9 +16,9 @@ try {
   for (final record in result.records) {
     print(record.text);
   }
-} on DnsQueryFailedException catch (error) {
+} on DohResolverQueryFailedException catch (error) {
   print('rcode ${error.rcode}');
-} on DnsException catch (error) {
+} on DohResolverException catch (error) {
   print(error);
 } finally {
   await transport.close();
@@ -47,7 +47,11 @@ use `dnssec_resolver`.
 
 Lookups send `do=true`, `cd=false` and `edns_client_subnet=0.0.0.0/0`, and pad
 the URL to a multiple of 128 characters. `startTxtLookup` returns a
-cancellable `DnsOperation` and never throws; every failure is a `DnsException`.
+cancellable `DnsOperation` and never throws; every deliberate failure is a
+named leaf of sealed `DohResolverException`. RCODE, HTTP status, size limits,
+deadlines and cancellation source are typed fields. Upstream transport errors
+are converted without parsing their messages; useful causes are retained but
+not printed.
 
 ## Development
 

@@ -20,8 +20,8 @@ jobs:
       # the same way the README describes for development.
       - run: |
           git clone --filter=blob:none --no-checkout https://github.com/cypherstack/doh_transport.git ../doh_transport
-          git -C ../doh_transport checkout --detach b00296109b2cb260798e944e2f0a928dc284cf4b
-          test "$(git -C ../doh_transport rev-parse HEAD)" = "b00296109b2cb260798e944e2f0a928dc284cf4b"
+          git -C ../doh_transport checkout --detach 42abf37b025d7be6d60484da6b5e0d95f884ce4a
+          test "$(git -C ../doh_transport rev-parse HEAD)" = "42abf37b025d7be6d60484da6b5e0d95f884ce4a"
         shell: bash
       - run: |
           cat > pubspec_overrides.yaml <<'YAML'

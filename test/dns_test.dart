@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:doh_resolver/doh_resolver.dart';
+import 'package:doh_transport/doh_transport.dart' as transport;
 import 'package:test/test.dart';
 
 Map<String, Object?> reply({List<Map<String, Object?>>? answers}) => {
@@ -66,7 +67,7 @@ void main() {
         expect(
             () => decode(body)
                 .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-            throwsA(isA<DnsAuthenticationUnavailableException>()));
+            throwsA(isA<DohResolverAuthenticationUnavailableException>()));
       }
     });
   }
@@ -74,8 +75,8 @@ void main() {
     expect(
         () => decode(reply()..['Status'] = 2)
             .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-        throwsA(
-            isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
+        throwsA(isA<DohResolverQueryFailedException>()
+            .having((e) => e.rcode, 'rcode', 2)));
   });
   test('ttl is the minimum over the CNAME chain and null for NODATA', () {
     ResolverAssertedTxtResult txt(List<Map<String, Object?>> answers) =>
@@ -96,7 +97,7 @@ void main() {
   test('Status must be an in-range RCODE', () {
     for (final status in [-1, 0x10000, 1.0, '0', null]) {
       expect(() => decode(reply()..['Status'] = status),
-          throwsA(isA<DnsMalformedResponseException>()),
+          throwsA(isA<DohResolverMalformedResponseException>()),
           reason: '$status');
     }
     expect(decode(reply()..['Status'] = 0xffff).status, 0xffff);
@@ -108,7 +109,7 @@ void main() {
       final body = reply()..[field] = List.filled(3, item);
       expect(
           () => DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 2),
-          throwsA(isA<DnsResponseTooLargeException>()),
+          throwsA(isA<DohResolverResponseTooLargeException>()),
           reason: field);
       expect(DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 3),
           isA<DnsResponse>(),
@@ -124,15 +125,19 @@ void main() {
     transport.completer.complete(DohHttpResponse(503, []));
     await expectLater(
         result,
-        throwsA(isA<DnsTransportException>()
-            .having((e) => e.httpStatus, 'httpStatus', 503)));
+        throwsA(isA<DohResolverHttpStatusException>()
+            .having((e) => e.statusCode, 'statusCode', 503)));
   });
-  test('the open exception root catches transport and resolution leaves', () {
-    expect(const DnsAliasLoopException('loop'), isA<DnsException>());
-    expect(const DnsTimeoutException('late'), isA<DnsException>());
-    expect(const DnsQueryFailedException('x', rcode: 3).rcode, 3);
-    expect(const DnsTimeoutException('late').toString(),
-        'DnsTimeoutException: late');
+  test('the sealed resolver root catches its named leaves', () {
+    expect(const DohResolverAliasLoopException('loop'),
+        isA<DohResolverException>());
+    expect(
+        const DohResolverLookupTimeoutException('late',
+            timeout: Duration(seconds: 12)),
+        isA<DohResolverException>());
+    expect(const DohResolverQueryFailedException('x', rcode: 3).rcode, 3);
+    expect(const DohResolverQueryFailedException('failed', rcode: 3).toString(),
+        'DohResolverQueryFailedException(rcode: 3): failed');
   });
   for (final questions in [
     <Object>[],
@@ -151,7 +156,7 @@ void main() {
       expect(
           () => decode(reply()..['Question'] = questions)
               .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-          throwsA(isA<DnsQuestionMismatchException>()));
+          throwsA(isA<DohResolverQuestionMismatchException>()));
     });
   }
   test('no answers is distinct from DNS failure', () {
@@ -165,7 +170,7 @@ void main() {
     expect(
         () => decode(reply(answers: [rr('alice.example', 5, 'alice.example')]))
             .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-        throwsA(isA<DnsAliasLoopException>()));
+        throwsA(isA<DohResolverAliasLoopException>()));
     for (final records in [
       [rr('alice.example', 5, 'pay.example'), rr('alice.example', 16, 'txt')],
       [
@@ -176,7 +181,7 @@ void main() {
       expect(
           () => decode(reply(answers: records))
               .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-          throwsA(isA<DnsAliasAmbiguousException>()));
+          throwsA(isA<DohResolverAliasAmbiguousException>()));
     }
     final chain = [
       rr('alice.example', 5, 'hop0.example'),
@@ -186,7 +191,7 @@ void main() {
     expect(
         () => decode(reply(answers: chain))
             .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw),
-        throwsA(isA<DnsAliasTooLongException>()));
+        throwsA(isA<DohResolverAliasTooLongException>()));
   });
   test('rejects invalid TTLs, names, record data, types and response shape',
       () {
@@ -206,12 +211,12 @@ void main() {
         ],
       reply(answers: [rr('K.example', 16, 'x')])
     ]) {
-      expect(() => decode(body), throwsA(isA<DnsException>()));
+      expect(() => decode(body), throwsA(isA<DohResolverException>()));
     }
     expect(
         () => decode(reply(
             answers: List.generate(65, (_) => rr('alice.example', 16, 'x')))),
-        throwsA(isA<DnsResponseTooLargeException>()));
+        throwsA(isA<DohResolverResponseTooLargeException>()));
   });
   test('TXT chunks and decimal UTF-8 octets are decoded without loss', () {
     expect(
@@ -227,7 +232,7 @@ void main() {
     expect(decodeDnsTxtBytes(r'"\255"', DnsTxtFormat.quoted), [255]);
     expect(utf8.decode(decodeDnsTxtBytes('"\\😀"', DnsTxtFormat.quoted)), '😀');
     expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
-        throwsA(isA<DnsMalformedResponseException>()));
+        throwsA(isA<DohResolverMalformedResponseException>()));
   });
   test('TTLs with the high bit set are treated as zero', () {
     for (final (raw, ttl) in [(0x7fffffff, 0x7fffffff), (0x80000000, 0)]) {
@@ -244,12 +249,12 @@ void main() {
       expect(utf8.decode(decodeDnsTxtBytes(value, DnsTxtFormat.raw)), value);
     }
     expect(() => decodeDnsTxtBytes('lone \ud800', DnsTxtFormat.raw),
-        throwsA(isA<DnsMalformedResponseException>()));
+        throwsA(isA<DohResolverMalformedResponseException>()));
     expect(decodeDnsTxtBytes('""', DnsTxtFormat.quoted), isEmpty);
     expect(decodeDnsTxtBytes(' "" "" ', DnsTxtFormat.quoted), isEmpty);
     for (final value in ['hello', 'a "b"', '', '   ']) {
       expect(() => decodeDnsTxtBytes(value, DnsTxtFormat.quoted),
-          throwsA(isA<DnsMalformedResponseException>()));
+          throwsA(isA<DohResolverMalformedResponseException>()));
     }
   });
   test('known resolvers get their TXT format; others must choose', () {
@@ -307,10 +312,10 @@ void main() {
       '"\ud800 x"',
     ]) {
       expect(() => decodeDnsTxtBytes(s, DnsTxtFormat.quoted),
-          throwsA(isA<DnsMalformedResponseException>()));
+          throwsA(isA<DohResolverMalformedResponseException>()));
     }
     expect(() => decodeDnsTxtBytes('a' * 8193, DnsTxtFormat.quoted),
-        throwsA(isA<DnsResponseTooLargeException>()));
+        throwsA(isA<DohResolverResponseTooLargeException>()));
   });
   test('requests privacy flags and propagates the authenticated result',
       () async {
@@ -365,13 +370,28 @@ void main() {
   });
   test('an invalid name fails the result without reaching the transport',
       () async {
-    final transport = FakeTransport();
-    final operation =
-        DohResolver(transport: transport).startTxtLookup('a..example');
+    final fake = FakeTransport();
+    final operation = DohResolver(transport: fake).startTxtLookup('a..example');
     await expectLater(
-        operation.result, throwsA(isA<DnsInvalidNameException>()));
+        operation.result,
+        throwsA(isA<DohResolverInvalidNameException>().having(
+            (error) => error.cause,
+            'cause',
+            isA<transport.DohInvalidNameException>())));
     operation.cancel();
-    expect(transport.uri, isNull);
+    expect(fake.uri, isNull);
+  });
+  test('dropped synchronous and asynchronous failures stay handled', () async {
+    final errors = <Object>[];
+    await runZonedGuarded(() async {
+      DohResolver(transport: FakeTransport()).startTxtLookup('a..example');
+      final fake = FakeTransport();
+      DohResolver(transport: fake).startTxtLookup('a.example');
+      fake.completer.completeError(StateError('down'));
+      await Future<void>.delayed(Duration.zero);
+    }, (error, _) => errors.add(error));
+
+    expect(errors, isEmpty);
   });
   test('endpoints with undecodable parameters or ports are rejected up front',
       () {
@@ -392,12 +412,88 @@ void main() {
   });
   test('a transport that throws on start fails the result', () async {
     for (final (thrown, expected) in [
-      (const DnsCancelledException('closed'), isA<DnsCancelledException>()),
-      (StateError('broken'), isA<DnsTransportException>()),
+      (
+        const transport.DohCancelledException('closed'),
+        isA<DohResolverCancelledException>().having((error) => error.source,
+            'source', DohResolverCancellationSource.transport)
+      ),
+      (StateError('broken'), isA<DohResolverTransportException>()),
     ]) {
       final result = DohResolver(transport: _ThrowingTransport(thrown))
           .lookupTxt('a.example');
       await expectLater(result, throwsA(expected));
+    }
+  });
+  test('maps transport leaves by type without parsing their messages',
+      () async {
+    const http = transport.DohHttpStatusException('opaque', statusCode: 502);
+    const requestTimeout = transport.DohRequestTimeoutException('opaque',
+        timeout: Duration(seconds: 9));
+    const connectionTimeout = transport.DohConnectionTimeoutException('opaque',
+        timeout: Duration(seconds: 4));
+    const cancelled = transport.DohCancelledException('opaque',
+        reason: transport.DohCancellationReason.transportClosed);
+    const tooLarge =
+        transport.DohResponseTooLargeException('opaque', limitBytes: 2048);
+    const malformed = transport.DohMalformedResponseException('opaque');
+    const mismatch = transport.DohQuestionMismatchException('opaque');
+    final connection = transport.DohConnectionException('opaque',
+        cause: StateError('socket failure'));
+    final cases = <(Object, Matcher)>[
+      (
+        http,
+        isA<DohResolverHttpStatusException>()
+            .having((error) => error.statusCode, 'statusCode', 502)
+            .having((error) => error.cause, 'cause', same(http))
+      ),
+      (
+        requestTimeout,
+        isA<DohResolverTransportTimeoutException>()
+            .having(
+                (error) => error.timeout, 'timeout', const Duration(seconds: 9))
+            .having((error) => error.cause, 'cause', same(requestTimeout))
+      ),
+      (
+        connectionTimeout,
+        isA<DohResolverTransportTimeoutException>()
+            .having(
+                (error) => error.timeout, 'timeout', const Duration(seconds: 4))
+            .having((error) => error.cause, 'cause', same(connectionTimeout))
+      ),
+      (
+        cancelled,
+        isA<DohResolverCancelledException>()
+            .having((error) => error.source, 'source',
+                DohResolverCancellationSource.transport)
+            .having((error) => error.cause, 'cause', same(cancelled))
+      ),
+      (
+        tooLarge,
+        isA<DohResolverResponseTooLargeException>()
+            .having((error) => error.maximum, 'maximum', 2048)
+            .having((error) => error.cause, 'cause', same(tooLarge))
+      ),
+      (
+        malformed,
+        isA<DohResolverMalformedResponseException>()
+            .having((error) => error.cause, 'cause', same(malformed))
+      ),
+      (
+        mismatch,
+        isA<DohResolverQuestionMismatchException>()
+            .having((error) => error.cause, 'cause', same(mismatch))
+      ),
+      (
+        connection,
+        isA<DohResolverTransportException>()
+            .having((error) => error.cause, 'cause', same(connection))
+      ),
+    ];
+    for (final (error, matcher) in cases) {
+      final fake = FakeTransport();
+      final result = DohResolver(transport: fake).lookupTxt('a.example');
+      fake.completer.completeError(error);
+      await expectLater(result, throwsA(matcher), reason: '$error');
     }
   });
   test('a throwing transport cancel cannot escape the deadline', () async {
@@ -405,7 +501,8 @@ void main() {
     final query = DohResolver(
             transport: transport, timeout: const Duration(milliseconds: 20))
         .startTxtLookup('alice.example');
-    await expectLater(query.result, throwsA(isA<DnsTimeoutException>()));
+    await expectLater(
+        query.result, throwsA(isA<DohResolverLookupTimeoutException>()));
     query.cancel();
   });
   for (final cancel in [true, false]) {
@@ -419,8 +516,8 @@ void main() {
       final failed = expectLater(
           query.result,
           throwsA(cancel
-              ? isA<DnsCancelledException>()
-              : isA<DnsTimeoutException>()));
+              ? isA<DohResolverCancelledException>()
+              : isA<DohResolverLookupTimeoutException>()));
       if (cancel) query.cancel();
       await failed;
       expect(transport.cancelled, isTrue);
@@ -454,7 +551,7 @@ void main() {
     final result = DohResolver(transport: transport).lookupTxt('alice.example');
     transport.completer.complete(_ThrowingResponse());
     await expectLater(result.timeout(const Duration(seconds: 1)),
-        throwsA(isA<DnsMalformedResponseException>()));
+        throwsA(isA<DohResolverMalformedResponseException>()));
   });
   test('rejects HTTP, JSON and injected response limit violations', () async {
     for (final response in [
@@ -466,13 +563,13 @@ void main() {
       final result =
           DohResolver(transport: transport).lookupTxt('alice.example');
       transport.completer.complete(response);
-      await expectLater(result, throwsA(isA<DnsException>()));
+      await expectLater(result, throwsA(isA<DohResolverException>()));
       expect(transport.cancelled, isFalse);
     }
     final failing = FakeTransport();
     final failed = DohResolver(transport: failing).lookupTxt('alice.example');
     failing.completer.completeError(StateError('down'));
-    await expectLater(failed, throwsA(isA<DnsTransportException>()));
+    await expectLater(failed, throwsA(isA<DohResolverTransportException>()));
     expect(failing.cancelled, isFalse);
   });
 }

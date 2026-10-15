@@ -2,25 +2,7 @@
 library;
 
 export 'package:doh_transport/doh_transport.dart'
-    show
-        DnsException,
-        DnsInvalidNameException,
-        DnsInvalidQueryException,
-        DnsMalformedResponseException,
-        DnsResponseTooLargeException,
-        DnsQuestionMismatchException,
-        DnsTransportException,
-        DnsCancelledException,
-        DnsTimeoutException,
-        DnsOperation,
-        DohHttpResponse,
-        DohTransport,
-        DnsRecord,
-        DnsTxtRecord,
-        DohWireTransport,
-        normalizeDnsName,
-        effectiveDnsTtl,
-        isUsableDohEndpoint;
+    show DnsOperation, DohHttpResponse, DohTransport, DohWireTransport;
 
 export 'src/dns.dart';
 export 'src/resolver.dart';

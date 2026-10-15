@@ -1,7 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:doh_transport/doh_transport.dart';
+import 'package:doh_transport/doh_transport.dart'
+    show
+        DnsOperation,
+        DohCancelledException,
+        DohConnectionTimeoutException,
+        DohHttpResponse,
+        DohHttpStatusException,
+        DohInvalidNameException,
+        DohMalformedResponseException,
+        DohQuestionMismatchException,
+        DohRequestTimeoutException,
+        DohResponseTooLargeException,
+        DohTransport,
+        DohTransportException,
+        isUsableDohEndpoint,
+        normalizeDnsName;
 
 import 'dns.dart';
 
@@ -62,12 +77,15 @@ class DohResolver {
   ///
   /// Sends `do=true`, `cd=false` and `edns_client_subnet=0.0.0.0/0`, and pads
   /// the URL to a multiple of 128 characters. Never throws: every failure is a
-  /// [DnsException] in the result.
+  /// [DohResolverException] in the result.
   DnsOperation<ResolverAssertedTxtResult> startTxtLookup(String domain) {
     try {
       domain = normalizeDnsName(domain);
-    } on DnsException catch (error) {
-      return DnsOperation.failed(error);
+    } on DohInvalidNameException catch (error, stack) {
+      return _failedOperation(
+          DohResolverInvalidNameException('Invalid ASCII DNS name',
+              cause: error),
+          stack);
     }
     // Preserve repeated endpoint parameters; resolver-supplied parameters take precedence.
     final parameters = <String, Object>{
@@ -86,15 +104,17 @@ class DohResolver {
     try {
       operation = transport.start(endpoint.replace(queryParameters: parameters),
           maxResponseBytes: maxResponseBytes);
-    } on DnsException catch (error) {
-      return DnsOperation.failed(error);
-    } catch (_) {
-      return DnsOperation.failed(
-          const DnsTransportException('DNS transport failed'));
+    } on DohTransportException catch (error, stack) {
+      return _failedOperation(
+          _mapTransportFailure(error, maxResponseBytes), stack);
+    } catch (error, stack) {
+      return _failedOperation(
+          DohResolverTransportException('DNS transport failed', cause: error),
+          stack);
     }
     final result = Completer<ResolverAssertedTxtResult>();
     late Timer timer;
-    void abort(DnsException error) {
+    void abort(DohResolverException error) {
       if (result.isCompleted) return;
       result.completeError(error);
       timer.cancel();
@@ -104,30 +124,37 @@ class DohResolver {
     }
 
     timer = Timer(
-        timeout, () => abort(const DnsTimeoutException('DNS query timed out')));
+        timeout,
+        () => abort(DohResolverLookupTimeoutException('DNS query timed out',
+            timeout: timeout)));
     operation.result.then((response) {
       if (result.isCompleted) return;
       try {
         if (response.statusCode != 200) {
-          throw DnsTransportException('DNS HTTPS request failed',
-              httpStatus: response.statusCode);
+          throw DohResolverHttpStatusException('DNS HTTPS request failed',
+              statusCode: response.statusCode);
         }
         if (response.body.length > maxResponseBytes) {
-          throw const DnsResponseTooLargeException('DNS body exceeds limit');
+          throw DohResolverResponseTooLargeException('DNS body exceeds limit',
+              kind: DohResolverLimitKind.responseBytes,
+              maximum: maxResponseBytes,
+              actual: response.body.length);
         }
         final body = jsonDecode(utf8.decode(response.body));
         result.complete(
             DnsResponse.fromJson(body, resolver: endpoint, age: response.age)
                 .authenticatedTxt(domain, txtFormat: txtFormat));
-      } on DnsException catch (error, stack) {
+      } on DohResolverException catch (error, stack) {
         result.completeError(error, stack);
       } on FormatException catch (_, stack) {
         result.completeError(
-            const DnsMalformedResponseException('Invalid DNS JSON encoding'),
+            const DohResolverMalformedResponseException(
+                'Invalid DNS JSON encoding'),
             stack);
-      } catch (_, stack) {
+      } catch (error, stack) {
         result.completeError(
-            const DnsMalformedResponseException('Unreadable DNS response'),
+            DohResolverMalformedResponseException('Unreadable DNS response',
+                cause: error),
             stack);
       } finally {
         timer.cancel();
@@ -136,16 +163,58 @@ class DohResolver {
       timer.cancel();
       if (!result.isCompleted) {
         result.completeError(
-            error is DnsException
-                ? error
-                : const DnsTransportException('DNS transport failed'),
-            stack);
+            _mapTransportFailure(error, maxResponseBytes), stack);
       }
     });
-    return DnsOperation(result.future,
-        () => abort(const DnsCancelledException('DNS query cancelled')));
+    return DnsOperation(
+        result.future,
+        () => abort(const DohResolverCancelledException('DNS query cancelled',
+            source: DohResolverCancellationSource.caller)));
   }
 }
+
+DnsOperation<T> _failedOperation<T>(
+    DohResolverException error, StackTrace stack) {
+  final result = Future<T>.error(error, stack);
+  result.ignore();
+  return DnsOperation(result, _noop);
+}
+
+void _noop() {}
+
+DohResolverException _mapTransportFailure(Object error, int maxResponseBytes) =>
+    switch (error) {
+      DohHttpStatusException() => DohResolverHttpStatusException(
+          'DNS HTTPS request failed',
+          statusCode: error.statusCode,
+          cause: error),
+      DohRequestTimeoutException() => DohResolverTransportTimeoutException(
+          'DNS transport request timed out',
+          timeout: error.timeout,
+          cause: error),
+      DohConnectionTimeoutException() => DohResolverTransportTimeoutException(
+          'DNS transport connection timed out',
+          timeout: error.timeout,
+          cause: error),
+      DohCancelledException() => DohResolverCancelledException(
+          'DNS transport cancelled',
+          source: DohResolverCancellationSource.transport,
+          cause: error),
+      DohResponseTooLargeException() => DohResolverResponseTooLargeException(
+          'DNS body exceeds limit',
+          kind: DohResolverLimitKind.responseBytes,
+          maximum: error.limitBytes ?? maxResponseBytes,
+          cause: error),
+      DohMalformedResponseException() => DohResolverMalformedResponseException(
+          'Malformed DNS transport response',
+          cause: error),
+      DohQuestionMismatchException() => DohResolverQuestionMismatchException(
+          'DNS question mismatch',
+          cause: error),
+      DohInvalidNameException() =>
+        DohResolverInvalidNameException('Invalid ASCII DNS name', cause: error),
+      _ => DohResolverTransportException('DNS transport failed', cause: error),
+    };
 
 DnsTxtFormat? _knownTxtFormat(String host) => switch (host) {
       'dns.google' ||
