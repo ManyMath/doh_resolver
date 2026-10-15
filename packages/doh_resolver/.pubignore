@@ -1,4 +1,7 @@
 .dart_tool/
+.github/
+coverage/
 pubspec.lock
 pubspec_overrides.yaml
-coverage/
+test/
+tool/

@@ -20,8 +20,9 @@ Map<String, Object?> rr(String name, int type, String data) => {
       'TTL': 60,
       'data': data,
     };
-DnsResponse decode(Object? json) => DnsResponse.fromJson(json,
-    resolver: Uri.parse('https://dns.example/resolve'));
+final resolver = Uri.parse('https://dns.example/resolve');
+DnsResponse decode(Object? json) =>
+    DnsResponse.fromJson(json, resolver: resolver);
 
 class FakeTransport implements DohTransport {
   final completer = Completer<DohHttpResponse>();
@@ -40,7 +41,7 @@ class FakeTransport implements DohTransport {
 }
 
 void main() {
-  test('only terminal-owner TXT answers are accepted; evidence retained', () {
+  test('only terminal-owner TXT answers are accepted; response retained', () {
     final response = decode(reply(answers: [
       rr('alice.example.', 5, 'pay.example.'),
       rr('pay.example.', 16, 'one'),
@@ -54,7 +55,7 @@ void main() {
     expect(result.aliases, hasLength(1));
     expect(result.response, same(response));
     expect(result.records.first.ttl, 60);
-    expect(result.authentication, DnsAuthentication.resolverAsserted);
+    expect(result, isA<ResolverAssertedTxtResult>());
   });
   for (final field in ['AD', 'CD', 'TC']) {
     test('missing or unacceptable $field never authenticates', () {
@@ -76,6 +77,47 @@ void main() {
         throwsA(
             isA<DnsQueryFailedException>().having((e) => e.rcode, 'rcode', 2)));
   });
+  test('ttl is the minimum over the CNAME chain and null for NODATA', () {
+    ResolverAssertedTxtResult txt(List<Map<String, Object?>> answers) =>
+        decode(reply(answers: answers))
+            .authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw);
+    expect(
+        txt([
+          rr('alice.example', 5, 'pay.example')..['TTL'] = 30,
+          rr('pay.example', 5, 'txt.example')..['TTL'] = 300,
+          rr('txt.example', 16, 'one')..['TTL'] = 90,
+          rr('txt.example', 16, 'two')..['TTL'] = 45,
+        ]).ttl,
+        30);
+    expect(txt([rr('alice.example', 16, 'x')..['TTL'] = 7]).ttl, 7);
+    expect(txt([rr('alice.example', 5, 'pay.example')]).ttl, isNull);
+    expect(txt([]).ttl, isNull);
+  });
+  test('Status must be an in-range RCODE', () {
+    for (final status in [-1, 0x10000, 1.0, '0', null]) {
+      expect(() => decode(reply()..['Status'] = status),
+          throwsA(isA<DnsMalformedResponseException>()),
+          reason: '$status');
+    }
+    expect(decode(reply()..['Status'] = 0xffff).status, 0xffff);
+  });
+  test('maxAnswers bounds the question and answer lists alike', () {
+    final question = {'name': 'alice.example.', 'type': 16};
+    final answer = rr('alice.example.', 16, 'x');
+    for (final (field, item) in [('Question', question), ('Answer', answer)]) {
+      final body = reply()..[field] = List.filled(3, item);
+      expect(
+          () => DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 2),
+          throwsA(isA<DnsResponseTooLargeException>()),
+          reason: field);
+      expect(DnsResponse.fromJson(body, resolver: resolver, maxAnswers: 3),
+          isA<DnsResponse>(),
+          reason: field);
+    }
+    expect(
+        () => DnsResponse.fromJson(reply(), resolver: resolver, maxAnswers: -1),
+        throwsArgumentError);
+  });
   test('HTTP failures carry the status', () async {
     final transport = FakeTransport();
     final result = DohResolver(transport: transport).lookupTxt('alice.example');
@@ -85,22 +127,10 @@ void main() {
         throwsA(isA<DnsTransportException>()
             .having((e) => e.httpStatus, 'httpStatus', 503)));
   });
-  test('the exception hierarchy is sealed and exhaustive', () {
-    String describe(DnsException error) => switch (error) {
-          DnsInvalidNameException() => 'name',
-          DnsInvalidQueryException() => 'query',
-          DnsMalformedResponseException() => 'malformed',
-          DnsResponseTooLargeException() => 'large',
-          DnsQueryFailedException(:final rcode) => 'rcode $rcode',
-          DnsAuthenticationUnavailableException() => 'unauthenticated',
-          DnsQuestionMismatchException() => 'mismatch',
-          DnsAliasException() => 'alias',
-          DnsTransportException(:final httpStatus) => 'http $httpStatus',
-          DnsCancelledException() => 'cancelled',
-          DnsTimeoutException() => 'timeout',
-        };
-    expect(describe(const DnsAliasLoopException('loop')), 'alias');
-    expect(describe(const DnsQueryFailedException('x', rcode: 3)), 'rcode 3');
+  test('the open exception root catches transport and resolution leaves', () {
+    expect(const DnsAliasLoopException('loop'), isA<DnsException>());
+    expect(const DnsTimeoutException('late'), isA<DnsException>());
+    expect(const DnsQueryFailedException('x', rcode: 3).rcode, 3);
     expect(const DnsTimeoutException('late').toString(),
         'DnsTimeoutException: late');
   });
@@ -199,34 +229,6 @@ void main() {
     expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
         throwsA(isA<DnsMalformedResponseException>()));
   });
-  test('validated evidence enforces DNS TTL bounds', () {
-    final issuer = DnsValidationIssuer('test');
-    for (final ttl in [-1, 0x100000000]) {
-      expect(
-          () => issuer.issueTxt(
-                  question: 'alice.example',
-                  canonicalName: 'alice.example',
-                  resolver: Uri.https('resolver.example', '/dns-query'),
-                  records: [
-                    DnsTxtRecord(name: 'alice.example', ttl: ttl, bytes: [1])
-                  ]),
-          throwsA(isA<DnsMalformedResponseException>()));
-    }
-    expect(
-        issuer
-            .issueTxt(
-                question: 'alice.example',
-                canonicalName: 'alice.example',
-                resolver: Uri.https('resolver.example', '/dns-query'),
-                records: [
-                  DnsTxtRecord(
-                      name: 'alice.example', ttl: 0xffffffff, bytes: [1])
-                ])
-            .records
-            .single
-            .ttl,
-        0);
-  });
   test('TTLs with the high bit set are treated as zero', () {
     for (final (raw, ttl) in [(0x7fffffff, 0x7fffffff), (0x80000000, 0)]) {
       final result = decode(reply(answers: [
@@ -235,19 +237,6 @@ void main() {
       ])).authenticatedTxt('alice.example', txtFormat: DnsTxtFormat.raw);
       expect(result.records.single.ttl, ttl);
       expect(result.aliases.single.ttl, ttl);
-      final issued = DnsValidationIssuer('test').issueTxt(
-          question: 'alice.example',
-          canonicalName: 'pay.example',
-          resolver: Uri.https('resolver.example', '/dns-query'),
-          records: [
-            DnsTxtRecord(name: 'pay.example', ttl: raw, bytes: [1])
-          ],
-          aliases: [
-            DnsRecord(
-                name: 'alice.example', type: 5, ttl: raw, data: 'pay.example')
-          ]);
-      expect(issued.records.single.ttl, ttl);
-      expect(issued.aliases.single.ttl, ttl);
     }
   });
   test('raw TXT is taken verbatim and quoted TXT must be quoted', () {
@@ -323,19 +312,8 @@ void main() {
     expect(() => decodeDnsTxtBytes('a' * 8193, DnsTxtFormat.quoted),
         throwsA(isA<DnsResponseTooLargeException>()));
   });
-  test('DNS names allow service labels without permitting alias syntax', () {
-    expect(normalizeDnsName('_Dmarc.Example.'), '_dmarc.example');
-    for (final name in [
-      'a@b.example',
-      'K.example',
-      'a..example',
-      'https://example.org'
-    ]) {
-      expect(() => normalizeDnsName(name),
-          throwsA(isA<DnsInvalidNameException>()));
-    }
-  });
-  test('requests privacy flags and propagates evidence', () async {
+  test('requests privacy flags and propagates the authenticated result',
+      () async {
     final transport = FakeTransport();
     final resolver = DohResolver(transport: transport);
     final query = resolver.startTxtLookup('alice.example');

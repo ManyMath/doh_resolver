@@ -10,7 +10,7 @@ Future<void> main(List<String> arguments) async {
     final resolver = DohResolver(transport: transport);
     try {
       final result = await resolver.lookupTxt(arguments.single);
-      print('Asserted by ${result.resolver} (${result.authentication.name})');
+      print('Asserted by ${result.resolver}');
       for (final record in result.records) {
         print('${record.name} TTL=${record.ttl}: ${record.text}');
       }
