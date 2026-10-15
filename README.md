@@ -51,9 +51,8 @@ cancellable `DnsOperation` and never throws; every failure is a `DnsException`.
 
 ## Development
 
-This repository is a pub workspace; the package is `packages/doh_resolver`.
-`doh_transport` is not on pub.dev yet: clone it beside this repository and add
-a root `pubspec_overrides.yaml`:
+The package is at the repository root. `doh_transport` is not on pub.dev yet:
+clone it beside this repository and add a `pubspec_overrides.yaml`:
 
 ```yaml
 dependency_overrides:
@@ -61,8 +60,8 @@ dependency_overrides:
     path: ../doh_transport
 ```
 
-Then run `dart pub get` at the root and `dart tool/check.dart` from
-`packages/doh_resolver`. Live resolver tests run with `DOH_LIVE_TESTS=1`.
+Run `dart tool/check.dart` from the repository root. Live resolver tests run
+with `DOH_LIVE_TESTS=1 dart test test/live_test.dart`.
 
 ## License
 

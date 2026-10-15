@@ -31,4 +31,3 @@ jobs:
           YAML
         shell: bash
       - run: dart tool/check.dart
-        working-directory: packages/doh_resolver
