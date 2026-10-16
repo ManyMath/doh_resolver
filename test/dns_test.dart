@@ -79,6 +79,24 @@ void main() {
     expect(txt([rr('alice.example', 5, 'pay.example')]).ttl, isNull);
     expect(txt([]).ttl, isNull);
   });
+  test('a result can be built directly, e.g. for fakes', () {
+    final bytes = utf8.encode('oa1:xmr recipient_address=valid;');
+    final records = [
+      DohResolverTxtRecord(name: 'a.example', ttl: 9, bytes: bytes)
+    ];
+    final result = ResolverAssertedTxtResult(
+        question: 'a.example',
+        canonicalName: 'a.example',
+        resolver: resolver,
+        records: records);
+    expect(result.records.single.text, 'oa1:xmr recipient_address=valid;');
+    expect(result.aliases, isEmpty);
+    expect(result.response, isNull);
+    expect(result.ttl, 9);
+    expect(() => result.records.add(records.single), throwsUnsupportedError);
+    expect(() => DohResolverTxtRecord(name: 'a.example', ttl: 1, bytes: [256]),
+        throwsArgumentError);
+  });
   test('Status must be an in-range RCODE', () {
     for (final status in [-1, 0x10000, 1.0, '0', null]) {
       expect(() => decode(reply()..['Status'] = status),

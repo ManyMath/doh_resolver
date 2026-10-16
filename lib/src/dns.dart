@@ -203,13 +203,13 @@ final class ResolverAssertedTxtResult {
   final List<DohResolverTxtRecord> records;
   final List<DohResolverRecord> aliases;
   final DnsResponse? response;
-  ResolverAssertedTxtResult._(
-      this.question,
-      this.canonicalName,
-      this.resolver,
-      List<DohResolverTxtRecord> records,
-      List<DohResolverRecord> aliases,
-      this.response)
+  ResolverAssertedTxtResult(
+      {required this.question,
+      required this.canonicalName,
+      required this.resolver,
+      required List<DohResolverTxtRecord> records,
+      List<DohResolverRecord> aliases = const [],
+      this.response})
       : records = List.unmodifiable(records),
         aliases = List.unmodifiable(aliases);
 
@@ -353,18 +353,18 @@ class DnsResponse {
       final cnames = records.where((record) => record.type == 5).toList();
       final txt = records.where((record) => record.type == 16).toList();
       if (cnames.isEmpty) {
-        return ResolverAssertedTxtResult._(
-            domain,
-            owner,
-            resolver,
-            txt
+        return ResolverAssertedTxtResult(
+            question: domain,
+            canonicalName: owner,
+            resolver: resolver,
+            records: txt
                 .map((r) => DohResolverTxtRecord(
                     name: owner,
                     ttl: r.ttl,
                     bytes: decodeDnsTxtBytes(r.data, txtFormat)))
                 .toList(),
-            aliases,
-            this);
+            aliases: aliases,
+            response: this);
       }
       if (cnames.length != 1 || txt.isNotEmpty) {
         throw const DohResolverAliasAmbiguousException('Ambiguous CNAME owner');
