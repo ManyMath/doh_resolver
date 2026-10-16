@@ -13,7 +13,7 @@ const _steps = [
     'tool',
     'example'
   ],
-  ['analyze', 'lib', 'test', 'tool', 'example'],
+  ['analyze', '--fatal-infos'],
   ['test', '--reporter', 'expanded'],
   ['pub', 'publish', '--dry-run'],
 ];

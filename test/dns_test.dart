@@ -200,7 +200,7 @@ void main() {
       () {
     for (final body in [
       null,
-      [],
+      <Object>[],
       reply()..['Answer'] = 'bad',
       reply()..['AD'] = 'true',
       reply(answers: [rr('alice.example', 16, 'x')..['TTL'] = -1]),
