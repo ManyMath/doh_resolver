@@ -1,11 +1,8 @@
 import 'package:doh_resolver/doh_resolver.dart';
-import 'package:doh_transport/doh_transport.dart' as transport;
 import 'package:test/test.dart';
 
 void main() {
   final transportCause = StateError('private resolver endpoint') as Object;
-  const requestTimeout = transport.DohRequestTimeoutException('request timeout',
-      timeout: Duration(seconds: 30));
 
   test('every resolver failure has the sealed package root', () {
     final failures = <DohResolverException>[
@@ -19,7 +16,7 @@ void main() {
       const DohResolverHttpStatusException('HTTP failure', statusCode: 503),
       DohResolverTransportException('transport failure', cause: transportCause),
       const DohResolverTransportTimeoutException('transport timeout',
-          timeout: Duration(seconds: 30), cause: requestTimeout),
+          timeout: Duration(seconds: 30)),
       const DohResolverLookupTimeoutException('lookup timeout',
           timeout: Duration(seconds: 12)),
       const DohResolverCancelledException('cancelled',

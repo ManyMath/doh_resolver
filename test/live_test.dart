@@ -1,7 +1,9 @@
 import 'dart:io';
 
-import 'package:doh_resolver/doh_resolver_io.dart';
+import 'package:doh_resolver/doh_resolver.dart';
 import 'package:test/test.dart';
+
+import '../example/doh_resolver_example.dart';
 
 final skip = Platform.environment['DOH_LIVE_TESTS'] == '1'
     ? null
@@ -13,7 +15,7 @@ void main() {
     Uri.https('cloudflare-dns.com', '/dns-query'),
   ]) {
     test('${endpoint.host} JSON resolver-asserted TXT', () async {
-      final transport = IoDohTransport();
+      final transport = HttpClientDohResolverTransport();
       addTearDown(transport.close);
       final result = await DohResolver(transport: transport, endpoint: endpoint)
           .lookupTxt('getmonero.org');
@@ -27,7 +29,7 @@ void main() {
     test('Google raw and Cloudflare quoted TXT decode $domain identically',
         () async {
       Future<Set<String>> texts(Uri endpoint) async {
-        final transport = IoDohTransport();
+        final transport = HttpClientDohResolverTransport();
         addTearDown(transport.close);
         return {
           for (final record

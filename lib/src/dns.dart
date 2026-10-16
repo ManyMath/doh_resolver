@@ -1,7 +1,6 @@
 import 'dart:convert';
 
-import 'package:doh_transport/doh_transport.dart'
-    show DohInvalidNameException, effectiveDnsTtl, normalizeDnsName;
+import 'names.dart';
 
 /// Every deliberately reported failure from this resolver package.
 ///
@@ -151,12 +150,12 @@ final class DohResolverAliasTooLongException extends DohResolverAliasException {
 }
 
 /// A DNS resource record with a normalized owner and presentation data.
-class DnsRecord {
+class DohResolverRecord {
   final String name;
   final int type;
   final int ttl;
   final String data;
-  const DnsRecord({
+  const DohResolverRecord({
     required this.name,
     required this.type,
     required this.ttl,
@@ -165,11 +164,11 @@ class DnsRecord {
 }
 
 /// The octets of one TXT RRset member, with its character-strings joined.
-class DnsTxtRecord {
+class DohResolverTxtRecord {
   final String name;
   final int ttl;
   final List<int> bytes;
-  DnsTxtRecord({
+  DohResolverTxtRecord({
     required this.name,
     required this.ttl,
     required List<int> bytes,
@@ -201,11 +200,16 @@ final class ResolverAssertedTxtResult {
   final String question;
   final String canonicalName;
   final Uri resolver;
-  final List<DnsTxtRecord> records;
-  final List<DnsRecord> aliases;
+  final List<DohResolverTxtRecord> records;
+  final List<DohResolverRecord> aliases;
   final DnsResponse? response;
-  ResolverAssertedTxtResult._(this.question, this.canonicalName, this.resolver,
-      List<DnsTxtRecord> records, List<DnsRecord> aliases, this.response)
+  ResolverAssertedTxtResult._(
+      this.question,
+      this.canonicalName,
+      this.resolver,
+      List<DohResolverTxtRecord> records,
+      List<DohResolverRecord> aliases,
+      this.response)
       : records = List.unmodifiable(records),
         aliases = List.unmodifiable(aliases);
 
@@ -228,7 +232,7 @@ class DnsResponse {
   final bool? checkingDisabled;
   final bool? truncated;
   final List<DnsQuestion> questions;
-  final List<DnsRecord> answers;
+  final List<DohResolverRecord> answers;
 
   /// The HTTP cache age already subtracted from the answer TTLs.
   final Duration age;
@@ -243,7 +247,7 @@ class DnsResponse {
       this.age);
 
   /// Validates [json] from a DoH JSON API. Answer TTLs are reduced by the
-  /// response's HTTP cache [age] and normalized by [effectiveDnsTtl]. The
+  /// response's HTTP cache [age] and normalized by the DNS TTL rules. The
   /// `Question` and `Answer` lists are each bounded by [maxAnswers].
   factory DnsResponse.fromJson(Object? json,
       {required Uri resolver,
@@ -281,7 +285,7 @@ class DnsResponse {
       if (input is! String) throw malformed;
       try {
         return normalizeDnsName(input);
-      } on DohInvalidNameException {
+      } on DohResolverInvalidNameException {
         throw malformed;
       }
     }
@@ -296,7 +300,7 @@ class DnsResponse {
       }
       questions.add(DnsQuestion(name(q['name']), q['type'] as int));
     }
-    final answers = <DnsRecord>[];
+    final answers = <DohResolverRecord>[];
     for (final a in rawAnswers) {
       if (a is! Map ||
           a['type'] is! int ||
@@ -308,7 +312,7 @@ class DnsResponse {
           a['data'] is! String) {
         throw malformed;
       }
-      answers.add(DnsRecord(
+      answers.add(DohResolverRecord(
           name: name(a['name']),
           type: a['type'] as int,
           ttl: effectiveDnsTtl(a['TTL'] as int, age: age),
@@ -340,7 +344,7 @@ class DnsResponse {
     }
     var owner = domain;
     final seen = <String>{};
-    final aliases = <DnsRecord>[];
+    final aliases = <DohResolverRecord>[];
     for (var visit = 0; visit < maxOwnerVisits; visit++) {
       if (!seen.add(owner)) {
         throw const DohResolverAliasLoopException('CNAME loop');
@@ -354,7 +358,7 @@ class DnsResponse {
             owner,
             resolver,
             txt
-                .map((r) => DnsTxtRecord(
+                .map((r) => DohResolverTxtRecord(
                     name: owner,
                     ttl: r.ttl,
                     bytes: decodeDnsTxtBytes(r.data, txtFormat)))
@@ -368,7 +372,7 @@ class DnsResponse {
       aliases.add(cnames.single);
       try {
         owner = normalizeDnsName(cnames.single.data);
-      } on DohInvalidNameException {
+      } on DohResolverInvalidNameException {
         throw const DohResolverMalformedResponseException(
             'Invalid CNAME target');
       }

@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:doh_resolver/doh_resolver.dart';
-import 'package:doh_transport/doh_transport.dart' as transport;
 import 'package:test/test.dart';
+
+import 'support/fake_transport.dart';
 
 Map<String, Object?> reply({List<Map<String, Object?>>? answers}) => {
       'Status': 0,
@@ -24,22 +25,6 @@ Map<String, Object?> rr(String name, int type, String data) => {
 final resolver = Uri.parse('https://dns.example/resolve');
 DnsResponse decode(Object? json) =>
     DnsResponse.fromJson(json, resolver: resolver);
-
-class FakeTransport implements DohTransport {
-  final completer = Completer<DohHttpResponse>();
-  bool cancelled = false;
-  bool throwOnCancel = false;
-  Uri? uri;
-  @override
-  DnsOperation<DohHttpResponse> start(Uri uri,
-      {required int maxResponseBytes}) {
-    this.uri = uri;
-    return DnsOperation(completer.future, () {
-      cancelled = true;
-      if (throwOnCancel) throw StateError('cancel failed');
-    });
-  }
-}
 
 void main() {
   test('only terminal-owner TXT answers are accepted; response retained', () {
@@ -120,9 +105,9 @@ void main() {
         throwsArgumentError);
   });
   test('HTTP failures carry the status', () async {
-    final transport = FakeTransport();
+    final transport = FakeDohResolverTransport();
     final result = DohResolver(transport: transport).lookupTxt('alice.example');
-    transport.completer.complete(DohHttpResponse(503, []));
+    transport.respond(DohResolverResponse(503, []));
     await expectLater(
         result,
         throwsA(isA<DohResolverHttpStatusException>()
@@ -231,7 +216,7 @@ void main() {
         'emoji 😀');
     expect(decodeDnsTxtBytes(r'"\255"', DnsTxtFormat.quoted), [255]);
     expect(utf8.decode(decodeDnsTxtBytes('"\\😀"', DnsTxtFormat.quoted)), '😀');
-    expect(() => DnsTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
+    expect(() => DohResolverTxtRecord(name: 'x', ttl: 1, bytes: [255]).text,
         throwsA(isA<DohResolverMalformedResponseException>()));
   });
   test('TTLs with the high bit set are treated as zero', () {
@@ -258,10 +243,11 @@ void main() {
     }
   });
   test('known resolvers get their TXT format; others must choose', () {
-    DnsTxtFormat formatOf(String url) =>
-        DohResolver(transport: FakeTransport(), endpoint: Uri.parse(url))
-            .txtFormat;
-    expect(DohResolver(transport: FakeTransport()).txtFormat, DnsTxtFormat.raw);
+    DnsTxtFormat formatOf(String url) => DohResolver(
+            transport: FakeDohResolverTransport(), endpoint: Uri.parse(url))
+        .txtFormat;
+    expect(DohResolver(transport: FakeDohResolverTransport()).txtFormat,
+        DnsTxtFormat.raw);
     expect(formatOf('https://dns.google/resolve'), DnsTxtFormat.raw);
     for (final host in [
       'cloudflare-dns.com',
@@ -275,7 +261,7 @@ void main() {
         throwsArgumentError);
     expect(
         DohResolver(
-                transport: FakeTransport(),
+                transport: FakeDohResolverTransport(),
                 endpoint: Uri.parse('https://dns.google/resolve'),
                 txtFormat: DnsTxtFormat.quoted)
             .txtFormat,
@@ -286,11 +272,11 @@ void main() {
     ('https://cloudflare-dns.com/dns-query', r'"hel" "lo\033"', 'hello!'),
   ]) {
     test('$endpoint TXT $data decodes to $text', () async {
-      final transport = FakeTransport();
+      final transport = FakeDohResolverTransport();
       final result =
           DohResolver(transport: transport, endpoint: Uri.parse(endpoint))
               .lookupTxt('alice.example');
-      transport.completer.complete(DohHttpResponse(
+      transport.respond(DohResolverResponse(
           200,
           utf8.encode(
               jsonEncode(reply(answers: [rr('alice.example', 16, data)])))));
@@ -319,7 +305,7 @@ void main() {
   });
   test('requests privacy flags and propagates the authenticated result',
       () async {
-    final transport = FakeTransport();
+    final transport = FakeDohResolverTransport();
     final resolver = DohResolver(transport: transport);
     final query = resolver.startTxtLookup('alice.example');
     expect(transport.uri!.queryParameters, {
@@ -331,8 +317,8 @@ void main() {
       'random_padding': matches(r'^X+$'),
     });
     expect(transport.uri.toString().length % 128, 0);
-    transport.completer
-        .complete(DohHttpResponse(200, utf8.encode(jsonEncode(reply()))));
+    transport
+        .respond(DohResolverResponse(200, utf8.encode(jsonEncode(reply()))));
     expect((await query.result).records.single.text,
         'oa1:xmr recipient_address=valid;');
     query.cancel();
@@ -340,7 +326,7 @@ void main() {
         reason: 'a completed transport operation is never cancelled');
   });
   test('preserves repeated endpoint parameters; resolver keys override', () {
-    final transport = FakeTransport();
+    final transport = FakeDohResolverTransport();
     DohResolver(
             txtFormat: DnsTxtFormat.raw,
             transport: transport,
@@ -356,7 +342,7 @@ void main() {
   test('padding hides name length and keeps endpoint parameters', () {
     final lengths = <int>{};
     for (final name in ['a.example', 'abcd.example']) {
-      final transport = FakeTransport();
+      final transport = FakeDohResolverTransport();
       DohResolver(
               txtFormat: DnsTxtFormat.raw,
               transport: transport,
@@ -370,24 +356,21 @@ void main() {
   });
   test('an invalid name fails the result without reaching the transport',
       () async {
-    final fake = FakeTransport();
+    final fake = FakeDohResolverTransport();
     final operation = DohResolver(transport: fake).startTxtLookup('a..example');
     await expectLater(
-        operation.result,
-        throwsA(isA<DohResolverInvalidNameException>().having(
-            (error) => error.cause,
-            'cause',
-            isA<transport.DohInvalidNameException>())));
+        operation.result, throwsA(isA<DohResolverInvalidNameException>()));
     operation.cancel();
     expect(fake.uri, isNull);
   });
   test('dropped synchronous and asynchronous failures stay handled', () async {
     final errors = <Object>[];
     await runZonedGuarded(() async {
-      DohResolver(transport: FakeTransport()).startTxtLookup('a..example');
-      final fake = FakeTransport();
+      DohResolver(transport: FakeDohResolverTransport())
+          .startTxtLookup('a..example');
+      final fake = FakeDohResolverTransport();
       DohResolver(transport: fake).startTxtLookup('a.example');
-      fake.completer.completeError(StateError('down'));
+      fake.fail(StateError('down'));
       await Future<void>.delayed(Duration.zero);
     }, (error, _) => errors.add(error));
 
@@ -405,7 +388,7 @@ void main() {
       expect(
           () => DohResolver(
               txtFormat: DnsTxtFormat.raw,
-              transport: FakeTransport(),
+              transport: FakeDohResolverTransport(),
               endpoint: Uri.parse(endpoint)),
           throwsArgumentError);
     }
@@ -413,91 +396,66 @@ void main() {
   test('a transport that throws on start fails the result', () async {
     for (final (thrown, expected) in [
       (
-        const transport.DohCancelledException('closed'),
+        const DohResolverCancelledException('closed',
+            source: DohResolverCancellationSource.transport),
         isA<DohResolverCancelledException>().having((error) => error.source,
             'source', DohResolverCancellationSource.transport)
       ),
-      (StateError('broken'), isA<DohResolverTransportException>()),
+      (
+        StateError('broken'),
+        isA<DohResolverTransportException>()
+            .having((error) => error.cause, 'cause', isA<StateError>())
+            .having(
+                (error) => error.causeStackTrace, 'causeStackTrace', isNotNull)
+      ),
     ]) {
-      final result = DohResolver(transport: _ThrowingTransport(thrown))
-          .lookupTxt('a.example');
-      await expectLater(result, throwsA(expected));
+      final fake = FakeDohResolverTransport()..throwOnStart = thrown;
+      await expectLater(DohResolver(transport: fake).lookupTxt('a.example'),
+          throwsA(expected));
     }
   });
-  test('maps transport leaves by type without parsing their messages',
+  test('resolver exceptions from the port pass through unchanged; others wrap',
       () async {
-    const http = transport.DohHttpStatusException('opaque', statusCode: 502);
-    const requestTimeout = transport.DohRequestTimeoutException('opaque',
-        timeout: Duration(seconds: 9));
-    const connectionTimeout = transport.DohConnectionTimeoutException('opaque',
-        timeout: Duration(seconds: 4));
-    const cancelled = transport.DohCancelledException('opaque',
-        reason: transport.DohCancellationReason.transportClosed);
-    const tooLarge =
-        transport.DohResponseTooLargeException('opaque', limitBytes: 2048);
-    const malformed = transport.DohMalformedResponseException('opaque');
-    const mismatch = transport.DohQuestionMismatchException('opaque');
-    final connection = transport.DohConnectionException('opaque',
-        cause: StateError('socket failure'));
-    final cases = <(Object, Matcher)>[
-      (
-        http,
-        isA<DohResolverHttpStatusException>()
-            .having((error) => error.statusCode, 'statusCode', 502)
-            .having((error) => error.cause, 'cause', same(http))
-      ),
-      (
-        requestTimeout,
-        isA<DohResolverTransportTimeoutException>()
-            .having(
-                (error) => error.timeout, 'timeout', const Duration(seconds: 9))
-            .having((error) => error.cause, 'cause', same(requestTimeout))
-      ),
-      (
-        connectionTimeout,
-        isA<DohResolverTransportTimeoutException>()
-            .having(
-                (error) => error.timeout, 'timeout', const Duration(seconds: 4))
-            .having((error) => error.cause, 'cause', same(connectionTimeout))
-      ),
-      (
-        cancelled,
-        isA<DohResolverCancelledException>()
-            .having((error) => error.source, 'source',
-                DohResolverCancellationSource.transport)
-            .having((error) => error.cause, 'cause', same(cancelled))
-      ),
-      (
-        tooLarge,
-        isA<DohResolverResponseTooLargeException>()
-            .having((error) => error.maximum, 'maximum', 2048)
-            .having((error) => error.cause, 'cause', same(tooLarge))
-      ),
-      (
-        malformed,
-        isA<DohResolverMalformedResponseException>()
-            .having((error) => error.cause, 'cause', same(malformed))
-      ),
-      (
-        mismatch,
-        isA<DohResolverQuestionMismatchException>()
-            .having((error) => error.cause, 'cause', same(mismatch))
-      ),
-      (
-        connection,
-        isA<DohResolverTransportException>()
-            .having((error) => error.cause, 'cause', same(connection))
-      ),
+    const passed = <DohResolverException>[
+      DohResolverHttpStatusException('opaque', statusCode: 502),
+      DohResolverTransportTimeoutException('opaque',
+          timeout: Duration(seconds: 9)),
+      DohResolverCancelledException('opaque',
+          source: DohResolverCancellationSource.transport),
+      DohResolverResponseTooLargeException('opaque',
+          kind: DohResolverLimitKind.responseBytes, maximum: 2048),
+      DohResolverMalformedResponseException('opaque'),
+      DohResolverQuestionMismatchException('opaque'),
+      DohResolverTransportException('opaque'),
     ];
-    for (final (error, matcher) in cases) {
-      final fake = FakeTransport();
-      final result = DohResolver(transport: fake).lookupTxt('a.example');
-      fake.completer.completeError(error);
-      await expectLater(result, throwsA(matcher), reason: '$error');
+    for (final error in passed) {
+      final fake = FakeDohResolverTransport([error]);
+      await expectLater(DohResolver(transport: fake).lookupTxt('a.example'),
+          throwsA(same(error)),
+          reason: '$error');
     }
+    final cause = StateError('socket failure');
+    final fake = FakeDohResolverTransport([cause]);
+    await expectLater(
+        DohResolver(transport: fake).lookupTxt('a.example'),
+        throwsA(isA<DohResolverTransportException>()
+            .having((error) => error.cause, 'cause', same(cause))
+            .having((error) => error.causeStackTrace, 'causeStackTrace',
+                isNotNull)));
+  });
+  test('scripted responses answer consecutive lookups in order', () async {
+    final fake = FakeDohResolverTransport([
+      DohResolverResponse(200, utf8.encode(jsonEncode(reply()))),
+      DohResolverResponse(503, []),
+    ]);
+    final resolver = DohResolver(transport: fake);
+    expect((await resolver.lookupTxt('alice.example')).records, hasLength(1));
+    await expectLater(resolver.lookupTxt('alice.example'),
+        throwsA(isA<DohResolverHttpStatusException>()));
+    expect(fake.requests, hasLength(2));
   });
   test('a throwing transport cancel cannot escape the deadline', () async {
-    final transport = FakeTransport()..throwOnCancel = true;
+    final transport = FakeDohResolverTransport()..throwOnCancel = true;
     final query = DohResolver(
             transport: transport, timeout: const Duration(milliseconds: 20))
         .startTxtLookup('alice.example');
@@ -509,7 +467,7 @@ void main() {
     test(
         '${cancel ? 'cancellation' : 'deadline'} aborts the underlying operation',
         () async {
-      final transport = FakeTransport();
+      final transport = FakeDohResolverTransport();
       final resolver = DohResolver(
           transport: transport, timeout: const Duration(milliseconds: 30));
       final query = resolver.startTxtLookup('alice.example');
@@ -521,17 +479,17 @@ void main() {
       if (cancel) query.cancel();
       await failed;
       expect(transport.cancelled, isTrue);
-      transport.completer
-          .complete(DohHttpResponse(200, utf8.encode(jsonEncode(reply()))));
+      transport
+          .respond(DohResolverResponse(200, utf8.encode(jsonEncode(reply()))));
       await Future<void>.delayed(Duration.zero);
     });
   }
   test('HTTP cache age reduces TTLs and never drives them negative', () async {
     for (final (age, ttl) in [(0, 60), (25, 35), (60, 0), (250, 0)]) {
-      final transport = FakeTransport();
+      final transport = FakeDohResolverTransport();
       final result =
           DohResolver(transport: transport).lookupTxt('alice.example');
-      transport.completer.complete(DohHttpResponse(
+      transport.respond(DohResolverResponse(
           200,
           utf8.encode(jsonEncode(reply(answers: [
             rr('alice.example', 5, 'pay.example'),
@@ -543,51 +501,42 @@ void main() {
       expect(txt.aliases.single.ttl, ttl);
       expect(txt.response!.age, Duration(seconds: age));
     }
-    expect(() => DohHttpResponse(200, [], age: const Duration(seconds: -1)),
+    expect(() => DohResolverResponse(200, [], age: const Duration(seconds: -1)),
         throwsArgumentError);
   });
   test('unexpected parsing errors complete with an exception', () async {
-    final transport = FakeTransport();
+    final transport = FakeDohResolverTransport();
     final result = DohResolver(transport: transport).lookupTxt('alice.example');
-    transport.completer.complete(_ThrowingResponse());
+    transport.respond(_ThrowingResponse());
     await expectLater(result.timeout(const Duration(seconds: 1)),
         throwsA(isA<DohResolverMalformedResponseException>()));
   });
   test('rejects HTTP, JSON and injected response limit violations', () async {
     for (final response in [
-      DohHttpResponse(302, []),
-      DohHttpResponse(200, utf8.encode('bad json')),
-      DohHttpResponse(200, List.filled(65537, 0))
+      DohResolverResponse(302, []),
+      DohResolverResponse(200, utf8.encode('bad json')),
+      DohResolverResponse(200, List.filled(65537, 0))
     ]) {
-      final transport = FakeTransport();
+      final transport = FakeDohResolverTransport();
       final result =
           DohResolver(transport: transport).lookupTxt('alice.example');
-      transport.completer.complete(response);
+      transport.respond(response);
       await expectLater(result, throwsA(isA<DohResolverException>()));
       expect(transport.cancelled, isFalse);
     }
-    final failing = FakeTransport();
+    final failing = FakeDohResolverTransport();
     final failed = DohResolver(transport: failing).lookupTxt('alice.example');
-    failing.completer.completeError(StateError('down'));
+    failing.fail(StateError('down'));
     await expectLater(failed, throwsA(isA<DohResolverTransportException>()));
     expect(failing.cancelled, isFalse);
   });
 }
 
-class _ThrowingResponse implements DohHttpResponse {
+class _ThrowingResponse implements DohResolverResponse {
   @override
   int get statusCode => 200;
   @override
   Duration get age => Duration.zero;
   @override
   List<int> get body => throw StateError('broken body');
-}
-
-class _ThrowingTransport implements DohTransport {
-  final Object error;
-  _ThrowingTransport(this.error);
-  @override
-  DnsOperation<DohHttpResponse> start(Uri uri,
-          {required int maxResponseBytes}) =>
-      throw error;
 }
