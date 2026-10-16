@@ -5,10 +5,11 @@ resolver marks as DNSSEC-authenticated.
 
 ## Usage
 
-```dart
-import 'package:doh_resolver/doh_resolver_io.dart';
+`DohResolver` needs a `DohResolverTransport`, the port that sends one bounded
+HTTPS GET. `example/doh_resolver_example.dart` has a `dart:io` implementation.
 
-final transport = IoDohTransport();
+```dart
+final transport = HttpClientDohResolverTransport();
 try {
   final result =
       await DohResolver(transport: transport).lookupTxt('example.com');
@@ -21,7 +22,7 @@ try {
 } on DohResolverException catch (error) {
   print(error);
 } finally {
-  await transport.close();
+  transport.close();
 }
 ```
 
@@ -31,7 +32,7 @@ The resolver performs the DNSSEC validation; this package does not. An answer
 is accepted only when the response has rcode 0, `AD` set, `CD` and `TC` clear
 and a single TXT question for the normalized name. `ResolverAssertedTxtResult`
 records that assertion and nothing more: a resolver that lies controls the
-result. The transport verifies the endpoint certificate. The resolver sees the
+result. The transport you supply must verify the endpoint certificate. The resolver sees the
 queried name and type and, without a proxy, your address. For local validation
 use `dnssec_resolver`.
 
@@ -42,27 +43,27 @@ use `dnssec_resolver`.
   pass `txtFormat`.
 - `timeout` 12 s for a whole lookup; the transport's own deadline also applies.
 - `maxResponseBytes` 65536.
-- Proxy, fixed destination, connection reuse and transport deadlines are
-  `IoDohTransport` options; see `doh_transport`.
+- Proxying, connection reuse and the transport's own deadline belong to your
+  `DohResolverTransport`.
 
 Lookups send `do=true`, `cd=false` and `edns_client_subnet=0.0.0.0/0`, and pad
 the URL to a multiple of 128 characters. `startTxtLookup` returns a
-cancellable `DnsOperation` and never throws; every deliberate failure is a
-named leaf of sealed `DohResolverException`. RCODE, HTTP status, size limits,
-deadlines and cancellation source are typed fields. Upstream transport errors
-are converted without parsing their messages; useful causes are retained but
-not printed.
+cancellable `DohResolverOperation` and never throws; every deliberate failure
+is a named leaf of sealed `DohResolverException`, with RCODE, HTTP status, size
+limits, deadlines and cancellation source as typed fields. Causes are retained
+in `cause` and `causeStackTrace` but not printed.
+
+## Transport contract
+
+`DohResolverTransport.start(uri, maxResponseBytes: n)` returns a
+`DohResolverOperation<DohResolverResponse>` (status, body, `Age`). It must not
+throw: failures complete the operation with a `DohResolverException` of the
+implementation's choosing (for example `DohResolverHttpStatusException` or
+`DohResolverTransportTimeoutException`); any other error is wrapped as
+`DohResolverTransportException`. `cancel` is idempotent, and the transport
+enforces `maxResponseBytes` while reading.
 
 ## Development
-
-The package is at the repository root. `doh_transport` is not on pub.dev yet:
-clone it beside this repository and add a `pubspec_overrides.yaml`:
-
-```yaml
-dependency_overrides:
-  doh_transport:
-    path: ../doh_transport
-```
 
 Run `dart tool/check.dart` from the repository root. Live resolver tests run
 with `DOH_LIVE_TESTS=1 dart test test/live_test.dart`.
