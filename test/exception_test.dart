@@ -65,4 +65,24 @@ void main() {
         failure.toString(), 'DohResolverTransportException: transport failed');
     expect(failure.toString(), isNot(contains('private resolver endpoint')));
   });
+
+  test('any leaf retains an arbitrary cause and its stack trace', () {
+    final stack = StackTrace.current;
+    final failures = <DohResolverException>[
+      DohResolverInvalidNameException('x', cause: 7, causeStackTrace: stack),
+      DohResolverHttpStatusException('x',
+          statusCode: 500, cause: 7, causeStackTrace: stack),
+      DohResolverCancelledException('x',
+          source: DohResolverCancellationSource.transport,
+          cause: 7,
+          causeStackTrace: stack),
+      DohResolverAliasLoopException('x', cause: 7, causeStackTrace: stack),
+    ];
+    for (final failure in failures) {
+      expect(failure.cause, 7);
+      expect(failure.causeStackTrace, same(stack));
+      expect(failure.toString(), isNot(contains('7')));
+    }
+    expect(const DohResolverTransportException('x').cause, isNull);
+  });
 }

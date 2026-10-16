@@ -1,16 +1,17 @@
 import 'dart:convert';
 
 import 'package:doh_transport/doh_transport.dart'
-    show
-        DohInvalidNameException,
-        DohTransportException,
-        effectiveDnsTtl,
-        normalizeDnsName;
+    show DohInvalidNameException, effectiveDnsTtl, normalizeDnsName;
 
 /// Every deliberately reported failure from this resolver package.
+///
+/// [cause] and [causeStackTrace] retain an underlying error, but are not
+/// included in [toString] because they can contain endpoints or payloads.
 sealed class DohResolverException implements Exception {
   final String message;
-  const DohResolverException(this.message);
+  final Object? cause;
+  final StackTrace? causeStackTrace;
+  const DohResolverException(this.message, {this.cause, this.causeStackTrace});
 
   @override
   String toString() => '$runtimeType: $message';
@@ -18,14 +19,14 @@ sealed class DohResolverException implements Exception {
 
 /// The requested name is not a valid ASCII DNS name.
 final class DohResolverInvalidNameException extends DohResolverException {
-  final DohTransportException? cause;
-  const DohResolverInvalidNameException(super.message, {this.cause});
+  const DohResolverInvalidNameException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// A resolver response does not parse or is internally inconsistent.
 final class DohResolverMalformedResponseException extends DohResolverException {
-  final Object? cause;
-  const DohResolverMalformedResponseException(super.message, {this.cause});
+  const DohResolverMalformedResponseException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 enum DohResolverLimitKind {
@@ -40,9 +41,12 @@ final class DohResolverResponseTooLargeException extends DohResolverException {
   final DohResolverLimitKind kind;
   final int maximum;
   final int? actual;
-  final DohTransportException? cause;
   const DohResolverResponseTooLargeException(super.message,
-      {required this.kind, required this.maximum, this.actual, this.cause});
+      {required this.kind,
+      required this.maximum,
+      this.actual,
+      super.cause,
+      super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(kind: ${kind.name}, maximum: $maximum, '
@@ -51,36 +55,31 @@ final class DohResolverResponseTooLargeException extends DohResolverException {
 
 /// A response does not answer the requested TXT question.
 final class DohResolverQuestionMismatchException extends DohResolverException {
-  final DohTransportException? cause;
-  const DohResolverQuestionMismatchException(super.message, {this.cause});
+  const DohResolverQuestionMismatchException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// The resolver returned a non-success HTTP [statusCode].
 final class DohResolverHttpStatusException extends DohResolverException {
   final int statusCode;
-  final DohTransportException? cause;
   const DohResolverHttpStatusException(super.message,
-      {required this.statusCode, this.cause});
+      {required this.statusCode, super.cause, super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(statusCode: $statusCode): $message';
 }
 
-/// An upstream transport failure that has no more specific resolver mapping.
-///
-/// [cause] is retained but omitted from [toString] because it can contain
-/// endpoint details.
+/// A transport failure that has no more specific resolver exception.
 final class DohResolverTransportException extends DohResolverException {
-  final Object cause;
-  const DohResolverTransportException(super.message, {required this.cause});
+  const DohResolverTransportException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
-/// The upstream transport reached its own [timeout].
+/// The transport reached its own [timeout].
 final class DohResolverTransportTimeoutException extends DohResolverException {
   final Duration timeout;
-  final DohTransportException cause;
   const DohResolverTransportTimeoutException(super.message,
-      {required this.timeout, required this.cause});
+      {required this.timeout, super.cause, super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(timeout: $timeout): $message';
@@ -90,7 +89,7 @@ final class DohResolverTransportTimeoutException extends DohResolverException {
 final class DohResolverLookupTimeoutException extends DohResolverException {
   final Duration timeout;
   const DohResolverLookupTimeoutException(super.message,
-      {required this.timeout});
+      {required this.timeout, super.cause, super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(timeout: $timeout): $message';
@@ -98,12 +97,11 @@ final class DohResolverLookupTimeoutException extends DohResolverException {
 
 enum DohResolverCancellationSource { caller, transport }
 
-/// A lookup was cancelled by its caller or by the upstream transport.
+/// A lookup was cancelled by its caller or by the transport.
 final class DohResolverCancelledException extends DohResolverException {
   final DohResolverCancellationSource source;
-  final DohTransportException? cause;
   const DohResolverCancelledException(super.message,
-      {required this.source, this.cause});
+      {required this.source, super.cause, super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(source: ${source.name}): $message';
@@ -112,7 +110,8 @@ final class DohResolverCancelledException extends DohResolverException {
 /// The resolver answered with a non-zero DNS RCODE, such as 3 (NXDOMAIN).
 final class DohResolverQueryFailedException extends DohResolverException {
   final int rcode;
-  const DohResolverQueryFailedException(super.message, {required this.rcode});
+  const DohResolverQueryFailedException(super.message,
+      {required this.rcode, super.cause, super.causeStackTrace});
 
   @override
   String toString() => '$runtimeType(rcode: $rcode): $message';
@@ -122,28 +121,33 @@ final class DohResolverQueryFailedException extends DohResolverException {
 /// was truncated, so it carries no resolver DNSSEC assertion.
 final class DohResolverAuthenticationUnavailableException
     extends DohResolverException {
-  const DohResolverAuthenticationUnavailableException(super.message);
+  const DohResolverAuthenticationUnavailableException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// The answer's CNAME chain could not be followed to a single owner.
 sealed class DohResolverAliasException extends DohResolverException {
-  const DohResolverAliasException(super.message);
+  const DohResolverAliasException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// A CNAME chain that revisits an owner.
 final class DohResolverAliasLoopException extends DohResolverAliasException {
-  const DohResolverAliasLoopException(super.message);
+  const DohResolverAliasLoopException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// An owner with several CNAMEs, or with both a CNAME and TXT records.
 final class DohResolverAliasAmbiguousException
     extends DohResolverAliasException {
-  const DohResolverAliasAmbiguousException(super.message);
+  const DohResolverAliasAmbiguousException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// A CNAME chain longer than the configured owner limit.
 final class DohResolverAliasTooLongException extends DohResolverAliasException {
-  const DohResolverAliasTooLongException(super.message);
+  const DohResolverAliasTooLongException(super.message,
+      {super.cause, super.causeStackTrace});
 }
 
 /// A DNS resource record with a normalized owner and presentation data.
